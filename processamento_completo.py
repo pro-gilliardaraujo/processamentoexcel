@@ -8,6 +8,7 @@ import numpy as np
 import os
 import glob
 from pathlib import Path
+from datetime import datetime
 from openpyxl import Workbook
 from openpyxl.utils.dataframe import dataframe_to_rows
 from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
@@ -58,17 +59,23 @@ def processar_arquivo_base(caminho_txt):
         
         # Conversão e cálculo de diferenças de hora
         df['Hora'] = pd.to_datetime(df['Hora'], format='%H:%M:%S')
-        df['Diferença_Hora'] = df['Hora'].diff().dt.total_seconds() / 3600
-        df['Diferença_Hora'] = df['Diferença_Hora'].apply(lambda x: max(x, 0))
         
-        # Nova regra: se Diferença_Hora > 0.50, então 0
-        df['Diferença_Hora'] = df['Diferença_Hora'].apply(lambda x: 0 if x > 0.50 else x)
+        # Calcular a diferença de hora em segundos para maior precisão e depois converter para horas
+        df['Diferença_Hora'] = df['Hora'].diff().dt.total_seconds() / 3600
+        
+        # Substituir valores negativos ou NaN por 0
+        df['Diferença_Hora'] = df['Diferença_Hora'].apply(lambda x: 0 if pd.isna(x) or x < 0 else x)
+        
+        # Nova regra: se Diferença_Hora > 0.50, então 0 (mantendo alta precisão)
+        df['Diferença_Hora'] = df['Diferença_Hora'].apply(lambda x: 0 if x > 0.50 else round(x, 4))
         
         # Cálculos adicionais
         RPM_MINIMO = 300  # Definindo constante para RPM mínimo
         df['Parada com Motor Ligado'] = ((df['Velocidade'] == 0) & (df['RPM Motor'] >= RPM_MINIMO)).astype(int)
+        
+        # Calcular horas produtivas com alta precisão
         df['Horas Produtivas'] = df.apply(
-            lambda row: row['Diferença_Hora'] if row['Grupo Operacao'] == 'Produtiva' else 0,
+            lambda row: round(row['Diferença_Hora'], 4) if row['Grupo Operacao'] == 'Produtiva' else 0,
             axis=1
         )
         
@@ -120,6 +127,13 @@ def calcular_base_calculo(df):
     # Inicializar as colunas de métricas
     resultados = []
     
+    # Função para calcular valores com alta precisão e depois formatar
+    def calcular_porcentagem(numerador, denominador, precisao=4):
+        """Calcula porcentagem como decimal (0-1) evitando divisão por zero."""
+        if denominador > 0:
+            return round((numerador / denominador), precisao)
+        return 0.0
+    
     # Calcular as métricas para cada combinação
     for idx, row in combinacoes.iterrows():
         equipamento = row['Equipamento']
@@ -133,36 +147,39 @@ def calcular_base_calculo(df):
         
         dados_filtrados = df[filtro]
         
-        # Horas totais
-        horas_totais = dados_filtrados['Diferença_Hora'].sum()
+        # Horas totais - manter mais casas decimais para cálculos intermediários
+        horas_totais = round(dados_filtrados['Diferença_Hora'].sum(), 4)
         
-        # Horas elevador (Esteira Ligada = 1)
-        horas_elevador = dados_filtrados[dados_filtrados['Esteira Ligada'] == 1]['Diferença_Hora'].sum()
+        # Horas elevador (Esteira Ligada = 1 E Pressão de Corte > 400)
+        horas_elevador = round(dados_filtrados[
+            (dados_filtrados['Esteira Ligada'] == 1) & 
+            (dados_filtrados['Pressao de Corte'] > 400)
+        ]['Diferença_Hora'].sum(), 4)
         
-        # Percentual horas elevador
-        percent_elevador = (horas_elevador / horas_totais * 100) if horas_totais > 0 else 0
+        # Percentual horas elevador (em decimal 0-1)
+        percent_elevador = calcular_porcentagem(horas_elevador, horas_totais)
         
         # RTK (Piloto Automático = 1 e Field Cruiser = 1)
-        rtk = dados_filtrados[(dados_filtrados['RTK (Piloto Automatico)'] == 1) & 
-                             (dados_filtrados['Field Cruiser'] == 1)]['Diferença_Hora'].sum()
+        rtk = round(dados_filtrados[(dados_filtrados['RTK (Piloto Automatico)'] == 1) & 
+                             (dados_filtrados['Field Cruiser'] == 1)]['Diferença_Hora'].sum(), 4)
         
         # Horas Produtivas
-        horas_produtivas = dados_filtrados['Horas Produtivas'].sum()
+        horas_produtivas = round(dados_filtrados['Horas Produtivas'].sum(), 4)
         
-        # % Utilização RTK
-        utilizacao_rtk = (rtk / horas_produtivas * 100) if horas_produtivas > 0 else 0
+        # % Utilização RTK (em decimal 0-1)
+        utilizacao_rtk = calcular_porcentagem(rtk, horas_produtivas)
         
         # Motor Ligado
-        motor_ligado = dados_filtrados[dados_filtrados['Motor Ligado'] == 1]['Diferença_Hora'].sum()
+        motor_ligado = round(dados_filtrados[dados_filtrados['Motor Ligado'] == 1]['Diferença_Hora'].sum(), 4)
         
-        # % Eficiência Elevador
-        eficiencia_elevador = (horas_elevador / motor_ligado * 100) if motor_ligado > 0 else 0
+        # % Eficiência Elevador (em decimal 0-1)
+        eficiencia_elevador = calcular_porcentagem(horas_elevador, motor_ligado)
         
         # Parado com Motor Ligado
-        parado_motor_ligado = dados_filtrados[dados_filtrados['Parada com Motor Ligado'] == 1]['Diferença_Hora'].sum()
+        parado_motor_ligado = round(dados_filtrados[dados_filtrados['Parada com Motor Ligado'] == 1]['Diferença_Hora'].sum(), 4)
         
-        # % Parado com motor ligado
-        percent_parado_motor = (parado_motor_ligado / motor_ligado * 100) if motor_ligado > 0 else 0
+        # % Parado com motor ligado (em decimal 0-1)
+        percent_parado_motor = calcular_porcentagem(parado_motor_ligado, motor_ligado)
         
         resultados.append({
             'Equipamento': equipamento,
@@ -192,6 +209,13 @@ def calcular_disponibilidade_mecanica(df):
     Returns:
         DataFrame: Disponibilidade mecânica por equipamento
     """
+    # Função para calcular valores com alta precisão e depois formatar
+    def calcular_porcentagem(numerador, denominador, precisao=4):
+        """Calcula porcentagem como decimal (0-1) evitando divisão por zero."""
+        if denominador > 0:
+            return round((numerador / denominador), precisao)
+        return 0.0
+    
     # Filtramos os dados excluindo os operadores da lista
     df_filtrado = df[~df['Operador'].isin(OPERADORES_EXCLUIR)]
     
@@ -201,13 +225,13 @@ def calcular_disponibilidade_mecanica(df):
     
     for equipamento in equipamentos:
         dados_equip = df_filtrado[df_filtrado['Equipamento'] == equipamento]
-        total_horas = dados_equip['Diferença_Hora'].sum()
+        total_horas = round(dados_equip['Diferença_Hora'].sum(), 4)
         
         # Calcular horas de manutenção
-        manutencao = dados_equip[dados_equip['Grupo Operacao'] == 'Manutenção']['Diferença_Hora'].sum()
+        manutencao = round(dados_equip[dados_equip['Grupo Operacao'] == 'Manutenção']['Diferença_Hora'].sum(), 4)
         
         # A disponibilidade mecânica é o percentual de tempo fora de manutenção
-        disp_mecanica = (total_horas - manutencao) / total_horas if total_horas > 0 else 0
+        disp_mecanica = calcular_porcentagem(total_horas - manutencao, total_horas)
         
         resultados.append({
             'Frota': equipamento,
@@ -233,13 +257,10 @@ def calcular_horas_por_frota(df):
     
     for equipamento in equipamentos:
         dados_equip = df[df['Equipamento'] == equipamento]
-        total_horas = dados_equip['Diferença_Hora'].sum()
+        total_horas = round(dados_equip['Diferença_Hora'].sum(), 2)
         
         # Calcular a diferença para 24 horas
-        diferenca_24h = 24 - total_horas
-        
-        # Se a diferença for negativa, considera-se 0 (mais de 24h registradas)
-        diferenca_24h = max(diferenca_24h, 0)
+        diferenca_24h = round(max(24 - total_horas, 0), 2)
         
         resultados.append({
             'Frota': equipamento,
@@ -252,6 +273,7 @@ def calcular_horas_por_frota(df):
 def calcular_eficiencia_energetica(base_calculo):
     """
     Calcula a eficiência energética por operador.
+    Eficiência energética = Horas elevador / Horas motor ligado
     
     Args:
         base_calculo (DataFrame): Tabela Base Calculo
@@ -259,6 +281,13 @@ def calcular_eficiencia_energetica(base_calculo):
     Returns:
         DataFrame: Eficiência energética por operador
     """
+    # Função para calcular valores com alta precisão e depois formatar
+    def calcular_porcentagem(numerador, denominador, precisao=4):
+        """Calcula porcentagem como decimal (0-1) evitando divisão por zero."""
+        if denominador > 0:
+            return round((numerador / denominador), precisao)
+        return 0.0
+    
     # Agrupar por operador (já filtrado pela função calcular_base_calculo)
     operadores = base_calculo[['Operador', 'Grupo Equipamento/Frente']].drop_duplicates()
     resultados = []
@@ -272,10 +301,14 @@ def calcular_eficiencia_energetica(base_calculo):
         dados_op = base_calculo[filtro]
         
         # Eficiência Energética = horas elevador / motor ligado
-        horas_elevador_sum = dados_op['Horas elevador'].sum()
-        motor_ligado_sum = dados_op['Motor Ligado'].sum()
+        horas_elevador_sum = round(dados_op['Horas elevador'].sum(), 4)
+        motor_ligado_sum = round(dados_op['Motor Ligado'].sum(), 4)
         
-        eficiencia = horas_elevador_sum / motor_ligado_sum if motor_ligado_sum > 0 else 0
+        # Calcular eficiência - já está em decimal, não precisa multiplicar por 100
+        eficiencia = calcular_porcentagem(horas_elevador_sum, motor_ligado_sum)
+        
+        # Garantir que não ultrapasse 100%
+        eficiencia = min(eficiencia, 1.0)
         
         resultados.append({
             'Operador': operador,
@@ -284,11 +317,15 @@ def calcular_eficiencia_energetica(base_calculo):
     
     return pd.DataFrame(resultados)
 
-def calcular_hora_elevador(base_calculo):
+def calcular_hora_elevador(df, base_calculo):
     """
     Calcula as horas de elevador por operador.
+    Considera-se horas de elevador quando:
+    - Esteira Ligada = 1
+    - Pressão de Corte > 400
     
     Args:
+        df (DataFrame): DataFrame base processado
         base_calculo (DataFrame): Tabela Base Calculo
     
     Returns:
@@ -306,8 +343,8 @@ def calcular_hora_elevador(base_calculo):
         filtro = (base_calculo['Operador'] == operador) & (base_calculo['Grupo Equipamento/Frente'] == grupo)
         dados_op = base_calculo[filtro]
         
-        # Somar horas de elevador
-        horas_elevador_sum = dados_op['Horas elevador'].sum()
+        # Somar horas de elevador da base de cálculo (já filtradas corretamente)
+        horas_elevador_sum = round(dados_op['Horas elevador'].sum(), 2)
         
         resultados.append({
             'Operador': operador,
@@ -326,6 +363,13 @@ def calcular_motor_ocioso(base_calculo):
     Returns:
         DataFrame: Percentual de motor ocioso por operador
     """
+    # Função para calcular valores com alta precisão e depois formatar
+    def calcular_porcentagem(numerador, denominador, precisao=4):
+        """Calcula porcentagem como decimal (0-1) evitando divisão por zero."""
+        if denominador > 0:
+            return round((numerador / denominador), precisao)
+        return 0.0
+    
     # Agrupar por operador (já filtrado pela função calcular_base_calculo)
     operadores = base_calculo[['Operador', 'Grupo Equipamento/Frente']].drop_duplicates()
     resultados = []
@@ -339,10 +383,10 @@ def calcular_motor_ocioso(base_calculo):
         dados_op = base_calculo[filtro]
         
         # Motor Ocioso = Parado Com Motor Ligado / Motor Ligado
-        parado_motor_sum = dados_op['Parado Com Motor Ligado'].sum()
-        motor_ligado_sum = dados_op['Motor Ligado'].sum()
+        parado_motor_sum = round(dados_op['Parado Com Motor Ligado'].sum(), 4)
+        motor_ligado_sum = round(dados_op['Motor Ligado'].sum(), 4)
         
-        percentual = parado_motor_sum / motor_ligado_sum if motor_ligado_sum > 0 else 0
+        percentual = calcular_porcentagem(parado_motor_sum, motor_ligado_sum)
         
         resultados.append({
             'Operador': operador,
@@ -351,16 +395,28 @@ def calcular_motor_ocioso(base_calculo):
     
     return pd.DataFrame(resultados)
 
-def calcular_uso_gps(base_calculo):
+def calcular_uso_gps(df, base_calculo):
     """
     Calcula o percentual de uso de GPS por operador.
+    O uso de GPS é definido como o tempo em que o equipamento está:
+    - Estado é "TRABALHANDO" ou "COLHEITA"
+    - Piloto Automático (RTK) = 1
+    - Velocidade > 0
     
     Args:
+        df (DataFrame): DataFrame base processado
         base_calculo (DataFrame): Tabela Base Calculo
     
     Returns:
         DataFrame: Percentual de uso de GPS por operador
     """
+    # Função para calcular valores com alta precisão e depois formatar
+    def calcular_porcentagem(numerador, denominador, precisao=4):
+        """Calcula porcentagem como decimal (0-1) evitando divisão por zero."""
+        if denominador > 0:
+            return round((numerador / denominador), precisao)
+        return 0.0
+    
     # Agrupar por operador (já filtrado pela função calcular_base_calculo)
     operadores = base_calculo[['Operador', 'Grupo Equipamento/Frente']].drop_duplicates()
     resultados = []
@@ -369,15 +425,28 @@ def calcular_uso_gps(base_calculo):
         operador = row['Operador']
         grupo = row['Grupo Equipamento/Frente']
         
-        # Filtrar dados para este operador e grupo
-        filtro = (base_calculo['Operador'] == operador) & (base_calculo['Grupo Equipamento/Frente'] == grupo)
-        dados_op = base_calculo[filtro]
+        # Filtrar dados base para este operador e grupo
+        filtro_base = (df['Operador'] == operador) & \
+                      (df['Grupo Equipamento/Frente'] == grupo)
+        dados_op_base = df[filtro_base]
         
-        # Uso GPS = RTK / Implemento Ligado
-        rtk_sum = dados_op['RTK'].sum()
-        horas_produtivas_sum = dados_op['Horas Produtivas'].sum()
+        # Calcular tempo total trabalhando
+        tempo_trabalhando = round(dados_op_base[
+            (dados_op_base['Estado'].isin(['TRABALHANDO', 'COLHEITA']))
+        ]['Diferença_Hora'].sum(), 4)
         
-        percentual = rtk_sum / horas_produtivas_sum if horas_produtivas_sum > 0 else 0
+        # Calcular tempo com GPS ativo (condições combinadas)
+        tempo_gps_ativo = round(dados_op_base[
+            (dados_op_base['Estado'].isin(['TRABALHANDO', 'COLHEITA'])) &
+            (dados_op_base['RTK (Piloto Automatico)'] == 1) &
+            (dados_op_base['Velocidade'] > 0)
+        ]['Diferença_Hora'].sum(), 4)
+        
+        # Calcular percentual em formato decimal (0-1)
+        percentual = calcular_porcentagem(tempo_gps_ativo, tempo_trabalhando)
+        
+        # Garantir que não ultrapasse 100% (1.0)
+        percentual = min(percentual, 1.0)
         
         resultados.append({
             'Operador': operador,
@@ -404,6 +473,25 @@ def criar_excel_com_planilhas(df_base, base_calculo, disp_mecanica, eficiencia_e
     """
     writer = pd.ExcelWriter(caminho_saida, engine='openpyxl')
     
+    # Arredondamento fixo para 2 casas decimais em todas as colunas numéricas antes de exportar
+    # Base Calculo - garantir que todas as colunas numéricas tenham 2 casas decimais
+    colunas_numericas = ['Horas totais', 'Horas elevador', '%', 'RTK', 'Horas Produtivas', 
+                         '% Utilização RTK', 'Motor Ligado', '% Eficiência Elevador', 
+                         'Parado Com Motor Ligado', '% Parado com motor ligado']
+    
+    for col in colunas_numericas:
+        if col in base_calculo.columns:
+            base_calculo[col] = base_calculo[col].apply(lambda x: round(x, 2))
+    
+    # Arredondar valores nas outras planilhas
+    disp_mecanica['Disponibilidade'] = disp_mecanica['Disponibilidade'].apply(lambda x: round(x, 4))
+    eficiencia_energetica['Eficiência'] = eficiencia_energetica['Eficiência'].apply(lambda x: round(x, 4))
+    hora_elevador['Horas'] = hora_elevador['Horas'].apply(lambda x: round(x, 2))
+    motor_ocioso['Porcentagem'] = motor_ocioso['Porcentagem'].apply(lambda x: round(x, 4))
+    uso_gps['Porcentagem'] = uso_gps['Porcentagem'].apply(lambda x: round(x, 4))
+    horas_por_frota['Horas Registradas'] = horas_por_frota['Horas Registradas'].apply(lambda x: round(x, 2))
+    horas_por_frota['Diferença para 24h'] = horas_por_frota['Diferença para 24h'].apply(lambda x: round(x, 2))
+    
     # Salvar cada DataFrame em uma planilha separada
     df_base.to_excel(writer, sheet_name='BASE', index=False)
     base_calculo.to_excel(writer, sheet_name='Base Calculo', index=False)
@@ -423,25 +511,46 @@ def criar_excel_com_planilhas(df_base, base_calculo, disp_mecanica, eficiencia_e
     worksheet = workbook['1_Disponibilidade Mecânica']
     for row in range(2, worksheet.max_row + 1):  # Começando da linha 2 (ignorando cabeçalho)
         cell = worksheet.cell(row=row, column=2)  # Coluna B (Disponibilidade)
-        cell.number_format = '0.00%'  # Formato de porcentagem
+        cell.number_format = '0.00%'  # Formato de porcentagem com 2 casas
     
     # Formatar planilha de Eficiência Energética
     worksheet = workbook['2_Eficiência Energética']
     for row in range(2, worksheet.max_row + 1):
         cell = worksheet.cell(row=row, column=2)  # Coluna B (Eficiência)
-        cell.number_format = '0.00%'  # Formato de porcentagem
+        cell.number_format = '0.00%'  # Formato de porcentagem com 2 casas
+    
+    # Formatar planilha de Hora Elevador
+    worksheet = workbook['3_Hora Elevador']
+    for row in range(2, worksheet.max_row + 1):
+        cell = worksheet.cell(row=row, column=2)  # Coluna B (Horas)
+        cell.number_format = '0.00'  # Formato decimal com 2 casas
     
     # Formatar planilha de Motor Ocioso
     worksheet = workbook['4_Motor Ocioso']
     for row in range(2, worksheet.max_row + 1):
         cell = worksheet.cell(row=row, column=2)  # Coluna B (Porcentagem)
-        cell.number_format = '0.00%'  # Formato de porcentagem
+        cell.number_format = '0.00%'  # Formato de porcentagem com 2 casas
     
     # Formatar planilha de Uso GPS
     worksheet = workbook['5_Uso GPS']
     for row in range(2, worksheet.max_row + 1):
         cell = worksheet.cell(row=row, column=2)  # Coluna B (Porcentagem)
-        cell.number_format = '0.00%'  # Formato de porcentagem
+        cell.number_format = '0.00%'  # Formato de porcentagem com 2 casas
+    
+    # Formatar planilha de Base Calculo
+    worksheet = workbook['Base Calculo']
+    for row in range(2, worksheet.max_row + 1):
+        # Formatar colunas decimais
+        columns_decimal = [4, 5, 7, 8, 10, 12]  # Colunas D, E, G, H, J, L (Horas totais, Horas elevador, etc.)
+        for col in columns_decimal:
+            cell = worksheet.cell(row=row, column=col)
+            cell.number_format = '0.00'  # Formato decimal com 2 casas
+        
+        # Formatar colunas de porcentagem
+        columns_percent = [6, 9, 11, 13]  # Colunas F, I, K, M (%, % Utilização RTK, etc.)
+        for col in columns_percent:
+            cell = worksheet.cell(row=row, column=col)
+            cell.number_format = '0.00%'  # Formato de porcentagem com 2 casas
     
     # Formatar planilha de Horas por Frota
     worksheet = workbook['Horas por Frota']
@@ -466,6 +575,9 @@ def processar_todos_arquivos():
     if diretorio_atual == '':
         diretorio_atual = '.'
     
+    # Criar um timestamp único para os arquivos de saída
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    
     # Encontrar todos os arquivos TXT
     arquivos_txt = glob.glob(os.path.join(diretorio_atual, "*.txt"))
     
@@ -478,7 +590,8 @@ def processar_todos_arquivos():
     # Processar cada arquivo
     for arquivo_txt in arquivos_txt:
         nome_base = os.path.splitext(os.path.basename(arquivo_txt))[0]
-        arquivo_saida = os.path.join(diretorio_atual, nome_base + ".xlsx")
+        # Modificar o nome do arquivo de saída com timestamp para evitar conflitos
+        arquivo_saida = os.path.join(diretorio_atual, f"{nome_base}_corrigido_{timestamp}.xlsx")
         
         print(f"\nProcessando arquivo: {nome_base}.txt")
         
@@ -494,9 +607,9 @@ def processar_todos_arquivos():
         # Calcular as métricas auxiliares
         disp_mecanica = calcular_disponibilidade_mecanica(df_base)
         eficiencia_energetica = calcular_eficiencia_energetica(base_calculo)
-        hora_elevador = calcular_hora_elevador(base_calculo)
+        hora_elevador = calcular_hora_elevador(df_base, base_calculo)
         motor_ocioso = calcular_motor_ocioso(base_calculo)
-        uso_gps = calcular_uso_gps(base_calculo)
+        uso_gps = calcular_uso_gps(df_base, base_calculo)
         horas_por_frota = calcular_horas_por_frota(df_base)
         
         # Criar o arquivo Excel com todas as planilhas
@@ -505,7 +618,7 @@ def processar_todos_arquivos():
             hora_elevador, motor_ocioso, uso_gps, horas_por_frota, arquivo_saida
         )
         
-        print(f"Arquivo {nome_base}.xlsx gerado com sucesso!")
+        print(f"Arquivo {arquivo_saida} gerado com sucesso!")
 
 if __name__ == "__main__":
     print("Iniciando processamento de arquivos...")
