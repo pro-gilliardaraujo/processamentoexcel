@@ -618,7 +618,7 @@ def criar_excel_com_planilhas(df_base, base_calculo, disp_mecanica, eficiencia_e
 
 def processar_todos_arquivos():
     """
-    Processa todos os arquivos TXT ou CSV de transbordos na pasta dados/transbordos.
+    Processa todos os arquivos TXT ou CSV de transbordos nas pastas dados e dados/transbordos.
     Busca arquivos que começam com "RV Transbordo", "frente" e "transbordos" com extensão .csv ou .txt.
     Ignora arquivos que contenham "colhedora" no nome.
     """
@@ -629,29 +629,37 @@ def processar_todos_arquivos():
     diretorio_raiz = os.path.dirname(diretorio_script)
     
     # Diretórios para dados de entrada e saída
-    diretorio_entrada = os.path.join(diretorio_raiz, "dados", "transbordos")
+    diretorio_dados = os.path.join(diretorio_raiz, "dados")
+    diretorio_transbordos = os.path.join(diretorio_raiz, "dados", "transbordos")
     diretorio_saida = os.path.join(diretorio_raiz, "output")
     
     # Verificar se os diretórios existem, caso contrário criar
-    if not os.path.exists(diretorio_entrada):
-        os.makedirs(diretorio_entrada)
+    if not os.path.exists(diretorio_dados):
+        os.makedirs(diretorio_dados)
+    if not os.path.exists(diretorio_transbordos):
+        os.makedirs(diretorio_transbordos)
     if not os.path.exists(diretorio_saida):
         os.makedirs(diretorio_saida)
     
-    # Encontrar todos os arquivos TXT/CSV de transbordos com diferentes padrões de nome
+    # Lista de diretórios para buscar arquivos
+    diretorios_busca = [diretorio_dados, diretorio_transbordos]
+    
+    # Encontrar todos os arquivos TXT/CSV de transbordos em ambos os diretórios
     arquivos = []
     
-    # Adicionar arquivos TXT sempre
-    arquivos += glob.glob(os.path.join(diretorio_entrada, "RV Transbordo*.txt"))
-    arquivos += glob.glob(os.path.join(diretorio_entrada, "frente*transbordos*.txt"))
-    arquivos += glob.glob(os.path.join(diretorio_entrada, "*transbordos*.txt"))
-    arquivos += glob.glob(os.path.join(diretorio_entrada, "transbordos.txt"))
-    
-    # Adicionar arquivos CSV apenas se processCsv for True
-    if processCsv:
-        arquivos += glob.glob(os.path.join(diretorio_entrada, "RV Transbordo*.csv"))
-        arquivos += glob.glob(os.path.join(diretorio_entrada, "frente*transbordos*.csv"))
-        arquivos += glob.glob(os.path.join(diretorio_entrada, "*transbordos*.csv"))
+    for diretorio in diretorios_busca:
+        # Adicionar arquivos TXT sempre
+        arquivos += glob.glob(os.path.join(diretorio, "RV Transbordo*.txt"))
+        arquivos += glob.glob(os.path.join(diretorio, "*transbordo*.txt"))
+        arquivos += glob.glob(os.path.join(diretorio, "frente*transbordos*.txt"))
+        arquivos += glob.glob(os.path.join(diretorio, "transbordo*.txt"))
+        
+        # Adicionar arquivos CSV apenas se processCsv for True
+        if processCsv:
+            arquivos += glob.glob(os.path.join(diretorio, "RV Transbordo*.csv"))
+            arquivos += glob.glob(os.path.join(diretorio, "*transbordo*.csv"))
+            arquivos += glob.glob(os.path.join(diretorio, "frente*transbordos*.csv"))
+            arquivos += glob.glob(os.path.join(diretorio, "transbordo*.csv"))
     
     # Filtrar arquivos que contenham "colhedora" no nome (case insensitive)
     arquivos = [arquivo for arquivo in arquivos if "colhedora" not in os.path.basename(arquivo).lower()]
@@ -660,7 +668,7 @@ def processar_todos_arquivos():
     arquivos = list(set(arquivos))
     
     if not arquivos:
-        print("Nenhum arquivo de transbordos encontrado na pasta dados/transbordos!")
+        print("Nenhum arquivo de transbordos encontrado nas pastas dados ou dados/transbordos!")
         return
     
     print(f"Encontrados {len(arquivos)} arquivos de transbordos para processar.")

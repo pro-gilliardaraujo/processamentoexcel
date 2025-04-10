@@ -602,16 +602,14 @@ def processar_todos_arquivos():
     
     print(f"Encontrados {len(arquivos_txt)} arquivos TXT para processar.")
     
-    # Criar um timestamp único para os arquivos de saída
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    
     # Processar cada arquivo
     for arquivo_txt in arquivos_txt:
         nome_base = os.path.splitext(os.path.basename(arquivo_txt))[0]
-        # Modificar o nome do arquivo de saída com timestamp para evitar conflitos
-        arquivo_saida = os.path.join(diretorio_saida, f"{nome_base}_corrigido_{timestamp}.xlsx")
+        # Nome de saída igual ao original, mas com extensão .xlsx na pasta output
+        arquivo_saida = os.path.join(diretorio_saida, f"{nome_base}.xlsx")
         
         print(f"\nProcessando arquivo: {nome_base}.txt")
+        print(f"Arquivo de saída: {os.path.basename(arquivo_saida)}")
         
         # Processar o arquivo base
         df_base = processar_arquivo_base(arquivo_txt)

@@ -610,7 +610,7 @@ def criar_excel_com_planilhas(df_base, base_calculo, disp_mecanica, eficiencia_e
 
 def processar_todos_arquivos():
     """
-    Processa todos os arquivos TXT ou CSV de colhedoras na pasta dados/colhedoras.
+    Processa todos os arquivos TXT ou CSV de colhedoras nas pastas dados e dados/colhedoras.
     Ignora arquivos que contenham "transbordo" no nome.
     """
     # Obter o diretório onde está o script
@@ -620,28 +620,35 @@ def processar_todos_arquivos():
     diretorio_raiz = os.path.dirname(diretorio_script)
     
     # Diretórios para dados de entrada e saída
-    diretorio_entrada = os.path.join(diretorio_raiz, "dados", "colhedoras")
+    diretorio_dados = os.path.join(diretorio_raiz, "dados")
+    diretorio_colhedoras = os.path.join(diretorio_raiz, "dados", "colhedoras")
     diretorio_saida = os.path.join(diretorio_raiz, "output")
     
     # Verificar se os diretórios existem, caso contrário criar
-    if not os.path.exists(diretorio_entrada):
-        os.makedirs(diretorio_entrada)
+    if not os.path.exists(diretorio_dados):
+        os.makedirs(diretorio_dados)
+    if not os.path.exists(diretorio_colhedoras):
+        os.makedirs(diretorio_colhedoras)
     if not os.path.exists(diretorio_saida):
         os.makedirs(diretorio_saida)
     
-    # Encontrar todos os arquivos de colhedoras
+    # Lista de diretórios para buscar arquivos
+    diretorios_busca = [diretorio_dados, diretorio_colhedoras]
+    
+    # Encontrar todos os arquivos de colhedoras em ambos os diretórios
     arquivos = []
     
-    # Adicionar arquivos TXT sempre
-    arquivos += glob.glob(os.path.join(diretorio_entrada, "RV Colhedora*.txt"))
-    arquivos += glob.glob(os.path.join(diretorio_entrada, "*colhedora*.txt"))
-    arquivos += glob.glob(os.path.join(diretorio_entrada, "colhedora*.txt"))
-    
-    # Adicionar arquivos CSV apenas se processCsv for True
-    if processCsv:
-        arquivos += glob.glob(os.path.join(diretorio_entrada, "RV Colhedora*.csv"))
-        arquivos += glob.glob(os.path.join(diretorio_entrada, "*colhedora*.csv"))
-        arquivos += glob.glob(os.path.join(diretorio_entrada, "colhedora*.csv"))
+    for diretorio in diretorios_busca:
+        # Adicionar arquivos TXT sempre
+        arquivos += glob.glob(os.path.join(diretorio, "RV Colhedora*.txt"))
+        arquivos += glob.glob(os.path.join(diretorio, "*colhedora*.txt"))
+        arquivos += glob.glob(os.path.join(diretorio, "colhedora*.txt"))
+        
+        # Adicionar arquivos CSV apenas se processCsv for True
+        if processCsv:
+            arquivos += glob.glob(os.path.join(diretorio, "RV Colhedora*.csv"))
+            arquivos += glob.glob(os.path.join(diretorio, "*colhedora*.csv"))
+            arquivos += glob.glob(os.path.join(diretorio, "colhedora*.csv"))
     
     # Filtrar arquivos que contenham "transbordo" no nome (case insensitive)
     arquivos = [arquivo for arquivo in arquivos if "transbordo" not in os.path.basename(arquivo).lower()]
@@ -650,7 +657,7 @@ def processar_todos_arquivos():
     arquivos = list(set(arquivos))
     
     if not arquivos:
-        print("Nenhum arquivo de colhedoras encontrado na pasta dados/colhedoras!")
+        print("Nenhum arquivo de colhedoras encontrado nas pastas dados ou dados/colhedoras!")
         return
     
     print(f"Encontrados {len(arquivos)} arquivos de colhedoras para processar.")
