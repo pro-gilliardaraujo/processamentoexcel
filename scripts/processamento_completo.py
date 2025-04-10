@@ -568,30 +568,48 @@ def criar_excel_com_planilhas(df_base, base_calculo, disp_mecanica, eficiencia_e
 
 def processar_todos_arquivos():
     """
-    Processa todos os arquivos TXT na pasta raiz do script.
+    Processa todos os arquivos TXT na pasta de dados e gera arquivos processados na pasta de saída.
     """
     # Obter o diretório onde está o script
-    diretorio_atual = os.path.dirname(os.path.abspath(__file__))
-    if diretorio_atual == '':
-        diretorio_atual = '.'
+    diretorio_script = os.path.dirname(os.path.abspath(__file__))
     
-    # Criar um timestamp único para os arquivos de saída
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    # Diretório raiz do projeto
+    diretorio_raiz = os.path.dirname(diretorio_script)
+    
+    # Diretórios para dados de entrada e saída
+    diretorio_saida = os.path.join(diretorio_raiz, "output")
+    
+    # Verificar se o diretório de saída existe, caso contrário criar
+    if not os.path.exists(diretorio_saida):
+        os.makedirs(diretorio_saida)
+    
+    # Verificar arquivos em todas as pastas de dados
+    diretorios_dados = [
+        os.path.join(diretorio_raiz, "dados"),
+        os.path.join(diretorio_raiz, "dados", "colhedoras"),
+        os.path.join(diretorio_raiz, "dados", "transbordos")
+    ]
     
     # Encontrar todos os arquivos TXT
-    arquivos_txt = glob.glob(os.path.join(diretorio_atual, "*.txt"))
+    arquivos_txt = []
+    for diretorio in diretorios_dados:
+        if os.path.exists(diretorio):
+            arquivos_txt.extend(glob.glob(os.path.join(diretorio, "*.txt")))
     
     if not arquivos_txt:
-        print("Nenhum arquivo TXT encontrado na pasta!")
+        print("Nenhum arquivo TXT encontrado nas pastas de dados!")
         return
     
     print(f"Encontrados {len(arquivos_txt)} arquivos TXT para processar.")
+    
+    # Criar um timestamp único para os arquivos de saída
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     
     # Processar cada arquivo
     for arquivo_txt in arquivos_txt:
         nome_base = os.path.splitext(os.path.basename(arquivo_txt))[0]
         # Modificar o nome do arquivo de saída com timestamp para evitar conflitos
-        arquivo_saida = os.path.join(diretorio_atual, f"{nome_base}_corrigido_{timestamp}.xlsx")
+        arquivo_saida = os.path.join(diretorio_saida, f"{nome_base}_corrigido_{timestamp}.xlsx")
         
         print(f"\nProcessando arquivo: {nome_base}.txt")
         
