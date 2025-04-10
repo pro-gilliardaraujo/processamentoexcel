@@ -212,25 +212,11 @@ def calcular_base_calculo(df):
         # Motor Ligado - CORREÇÃO: Soma das Diferença_Hora quando Motor Ligado = 1
         motor_ligado = round(dados_filtrados[dados_filtrados['Motor Ligado'] == 1]['Diferença_Hora'].sum(), 4)
         
-        # Verificar e calcular "Parado Com Motor Ligado" se necessário
-        if 'Parado Com Motor Ligado' not in dados_filtrados.columns:
-            dados_filtrados['Parado Com Motor Ligado'] = ((dados_filtrados['Velocidade'] == 0) & 
-                                                   (dados_filtrados['RPM Motor'] >= RPM_MINIMO)).astype(int)
-        
-        # Verificar se Horas Produtivas já existe
-        if 'Horas Produtivas' not in dados_filtrados.columns or dados_filtrados['Horas Produtivas'].isna().any():
-            # Calcular horas produtivas
-            dados_filtrados['Horas Produtivas'] = dados_filtrados.apply(
-                lambda row: round(row['Diferença_Hora'], 4) if row['Grupo Operacao'] == 'Produtiva' else 0,
-                axis=1
-            )
-        else:
-            # Limpa e converte para número
-            dados_filtrados['Horas Produtivas'] = pd.to_numeric(dados_filtrados['Horas Produtivas'].astype(str).str.strip(), errors='coerce')
-            dados_filtrados['Horas Produtivas'] = dados_filtrados['Horas Produtivas'].fillna(0)
+        # Parado com Motor Ligado
+        parado_motor_ligado = round(dados_filtrados[dados_filtrados['Parado Com Motor Ligado'] == 1]['Diferença_Hora'].sum(), 4)
         
         # % Parado com motor ligado (em decimal 0-1)
-        percent_parado_motor = calcular_porcentagem(dados_filtrados[dados_filtrados['Parado Com Motor Ligado'] == 1]['Diferença_Hora'].sum(), motor_ligado)
+        percent_parado_motor = calcular_porcentagem(parado_motor_ligado, motor_ligado)
         
         # Falta de Apontamento - CORREÇÃO: Contabilizar apenas registros explicitamente marcados com código 8340
         falta_apontamento = round(dados_filtrados[
@@ -243,8 +229,8 @@ def calcular_base_calculo(df):
         ]['Diferença_Hora'].sum(), 4)
         
         # % Falta de apontamento (em decimal 0-1)
-        # Alterado: Dividido pelo tempo total ao invés de motor ligado
-        percent_falta_apontamento = calcular_porcentagem(falta_apontamento, horas_totais)
+        # Dividido pelo tempo total de motor ligado
+        percent_falta_apontamento = calcular_porcentagem(falta_apontamento, motor_ligado)
         
         resultados.append({
             'Equipamento': equipamento,
@@ -255,7 +241,7 @@ def calcular_base_calculo(df):
             'GPS': gps,
             '% Utilização GPS': utilizacao_gps,
             'Motor Ligado': motor_ligado,
-            'Parado Com Motor Ligado': dados_filtrados[dados_filtrados['Parado Com Motor Ligado'] == 1]['Diferença_Hora'].sum(),
+            'Parado Com Motor Ligado': parado_motor_ligado,
             '% Parado com motor ligado': percent_parado_motor,
             'Falta de Apontamento': falta_apontamento,
             '% Falta de Apontamento': percent_falta_apontamento
@@ -432,7 +418,6 @@ def calcular_motor_ocioso(base_calculo):
 def calcular_falta_apontamento(base_calculo):
     """
     Calcula o percentual de falta de apontamento por operador.
-    Modificação: Utiliza horas totais como denominador ao invés de motor ligado.
     
     Args:
         base_calculo (DataFrame): Tabela Base Calculo
@@ -459,12 +444,12 @@ def calcular_falta_apontamento(base_calculo):
         filtro = (base_calculo['Operador'] == operador) & (base_calculo['Grupo Equipamento/Frente'] == grupo)
         dados_op = base_calculo[filtro]
         
-        # Alterado: Falta de Apontamento / Horas totais (ao invés de Motor Ligado)
+        # Usar os valores já calculados em base_calculo
         falta_apontamento_sum = round(dados_op['Falta de Apontamento'].sum(), 4)
-        horas_totais_sum = round(dados_op['Horas totais'].sum(), 4)
+        motor_ligado_sum = round(dados_op['Motor Ligado'].sum(), 4)
         
-        # Percentual já calculado em base_calculo, mas recalculamos para agregações
-        percentual = calcular_porcentagem(falta_apontamento_sum, horas_totais_sum)
+        # Percentual já calculado em base_calculo, mas podemos recalcular para agregações
+        percentual = calcular_porcentagem(falta_apontamento_sum, motor_ligado_sum)
         
         resultados.append({
             'Operador': operador,
