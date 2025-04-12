@@ -8,6 +8,7 @@ import pandas as pd
 import numpy as np
 import os
 import glob
+import json
 from pathlib import Path
 from datetime import datetime
 from openpyxl import Workbook
@@ -18,8 +19,53 @@ from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
 processCsv = True  # Altere para True quando quiser processar arquivos CSV
 arquivo_saida_unificado = "relatorio_unificado.xlsx"  # Nome do arquivo de saída unificado
 
+# Carregar configurações
+def carregar_config_calculos():
+    """
+    Carrega as configurações de cálculos do arquivo JSON.
+    Se o arquivo não existir, retorna configurações padrão.
+    """
+    config_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "config", "calculos_config.json")
+    
+    # Configuração padrão
+    config_padrao = {
+        "CD": {
+            "motor_ocioso": {
+                "tipo_calculo": "Remover do cálculo",
+                "operacoes_excluidas": [],
+                "grupos_operacao_excluidos": ["Manutenção"]
+            },
+            "operadores_excluidos": ["9999 - TROCA DE TURNO"],
+            "equipamentos_excluidos": []
+        },
+        "TT": {
+            "motor_ocioso": {
+                "tipo_calculo": "Remover do cálculo",
+                "operacoes_excluidas": [],
+                "grupos_operacao_excluidos": ["Manutenção"]
+            },
+            "operadores_excluidos": ["9999 - TROCA DE TURNO"],
+            "equipamentos_excluidos": []
+        }
+    }
+    
+    try:
+        if os.path.exists(config_path):
+            with open(config_path, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        else:
+            print(f"Arquivo de configuração não encontrado em {config_path}. Usando configuração padrão.")
+            return config_padrao
+    except Exception as e:
+        print(f"Erro ao carregar configurações: {str(e)}. Usando configuração padrão.")
+        return config_padrao
+
+# Carregar configurações
+CONFIG_CALCULOS = carregar_config_calculos()
+
 # Constantes comuns
-OPERADORES_EXCLUIR = ["9999 - TROCA DE TURNO"]
+# OPERADORES_EXCLUIR = ["9999 - TROCA DE TURNO"]
+# Removida a constante hardcoded já que estamos usando a configuração dinâmica
 
 # Constantes para colhedoras
 COLUNAS_REMOVER_COLHEDORAS = [
@@ -80,8 +126,16 @@ def calcular_disponibilidade_mecanica(df):
     Returns:
         DataFrame: Disponibilidade mecânica por equipamento
     """
-    # Filtramos os dados excluindo os operadores da lista
-    df_filtrado = df[~df['Operador'].isin(OPERADORES_EXCLUIR)]
+    # Determinar o tipo de equipamento (CD ou TT) com base nas colunas
+    tipo_equipamento = "CD" if "Parada com Motor Ligado" in df.columns else "TT"
+    
+    # Obter operadores e equipamentos excluídos da configuração
+    operadores_excluidos = CONFIG_CALCULOS.get(tipo_equipamento, {}).get("operadores_excluidos", ["9999 - TROCA DE TURNO"])
+    equipamentos_excluidos = CONFIG_CALCULOS.get(tipo_equipamento, {}).get("equipamentos_excluidos", [])
+    
+    # Filtramos os dados excluindo os operadores e equipamentos configurados
+    df_filtrado = df[~df['Operador'].isin(operadores_excluidos)]
+    df_filtrado = df_filtrado[~df_filtrado['Equipamento'].isin(equipamentos_excluidos)]
     
     # Agrupar por Equipamento e calcular horas por grupo operacional
     equipamentos = df_filtrado['Equipamento'].unique()
@@ -243,11 +297,18 @@ def calcular_base_calculo_colhedora(df):
     Returns:
         DataFrame: Tabela Base Calculo com todas as métricas calculadas
     """
+    # Obter operadores e equipamentos excluídos da configuração
+    operadores_excluidos = CONFIG_CALCULOS.get("CD", {}).get("operadores_excluidos", ["9999 - TROCA DE TURNO"])
+    equipamentos_excluidos = CONFIG_CALCULOS.get("CD", {}).get("equipamentos_excluidos", [])
+    
+    # Filtrar equipamentos excluídos
+    df = df[~df['Equipamento'].isin(equipamentos_excluidos)]
+    
     # Extrair combinações únicas de Equipamento, Grupo Equipamento/Frente e Operador
     combinacoes = df[['Equipamento', 'Grupo Equipamento/Frente', 'Operador']].drop_duplicates().reset_index(drop=True)
     
     # Filtrar operadores excluídos
-    combinacoes = combinacoes[~combinacoes['Operador'].isin(OPERADORES_EXCLUIR)]
+    combinacoes = combinacoes[~combinacoes['Operador'].isin(operadores_excluidos)]
     
     # Inicializar as colunas de métricas
     resultados = []
@@ -264,6 +325,10 @@ def calcular_base_calculo_colhedora(df):
                 (df['Operador'] == operador)
         
         dados_filtrados = df[filtro]
+        
+        # Verificar se há dados suficientes para esta combinação
+        if len(dados_filtrados) == 0:
+            continue
         
         # Horas totais - manter mais casas decimais para cálculos intermediários
         horas_totais = round(dados_filtrados['Diferença_Hora'].sum(), 4)
@@ -390,17 +455,23 @@ def calcular_hora_elevador(df, base_calculo):
     
     return pd.DataFrame(resultados)
 
-def calcular_motor_ocioso_colhedora(base_calculo):
+def calcular_motor_ocioso_colhedora(base_calculo, df_base):
     """
     Calcula o percentual de motor ocioso por operador para colhedoras.
     
     Args:
         base_calculo (DataFrame): Tabela Base Calculo
+        df_base (DataFrame): DataFrame base processado
     
     Returns:
-        DataFrame: Percentual de motor ocioso por operador
+        DataFrame: Dados de motor ocioso por operador incluindo tempo operação, tempo ocioso e porcentagem
     """
-    # Agrupar por operador
+    # Carregar configuração para saber quais operações e grupos devem ser excluídos
+    config = carregar_config_calculos()
+    operacoes_excluidas = config.get("CD", {}).get("motor_ocioso", {}).get("operacoes_excluidas", [])
+    grupos_operacao_excluidos = config.get("CD", {}).get("motor_ocioso", {}).get("grupos_operacao_excluidos", ["Manutenção"])
+    
+    # Agrupar por operador (já filtrado pela função calcular_base_calculo)
     operadores = base_calculo[['Operador', 'Grupo Equipamento/Frente']].drop_duplicates()
     resultados = []
     
@@ -409,17 +480,33 @@ def calcular_motor_ocioso_colhedora(base_calculo):
         grupo = row['Grupo Equipamento/Frente']
         
         # Filtrar dados para este operador e grupo
-        filtro = (base_calculo['Operador'] == operador) & (base_calculo['Grupo Equipamento/Frente'] == grupo)
-        dados_op = base_calculo[filtro]
+        filtro_base = (df_base['Operador'] == operador) & (df_base['Grupo Equipamento/Frente'] == grupo)
+        df_operador = df_base[filtro_base].copy()
         
-        # Motor Ocioso = Parado Com Motor Ligado / Motor Ligado
-        parado_motor_sum = round(dados_op['Parado Com Motor Ligado'].sum(), 4)
-        motor_ligado_sum = round(dados_op['Motor Ligado'].sum(), 4)
+        # Filtrar dados - excluir operações específicas
+        if operacoes_excluidas:
+            df_operador = df_operador[~df_operador['Operacao'].isin(operacoes_excluidas)]
         
-        percentual = calcular_porcentagem(parado_motor_sum, motor_ligado_sum)
+        # Excluir grupos de operação específicos
+        if grupos_operacao_excluidos:
+            df_operador = df_operador[~df_operador['Grupo Operacao'].isin(grupos_operacao_excluidos)]
+        
+        # Calcular motor ocioso
+        tempo_motor_ligado = round(df_operador[df_operador['Motor Ligado'] == 1]['Diferença_Hora'].sum(), 4)
+        
+        # Parado com Motor Ligado (já calculado previamente na preparação dos dados)
+        tempo_parado_motor_ligado = round(df_operador[df_operador['Parada com Motor Ligado'] == 1]['Diferença_Hora'].sum(), 4)
+        
+        # Calcular percentual motor ocioso
+        if tempo_motor_ligado > 0:
+            percentual = round(tempo_parado_motor_ligado / tempo_motor_ligado, 4)
+        else:
+            percentual = 0.0
         
         resultados.append({
             'Operador': operador,
+            'Tempo Operação': tempo_motor_ligado,
+            'Tempo Ocioso': tempo_parado_motor_ligado,
             'Porcentagem': percentual
         })
     
@@ -594,11 +681,18 @@ def calcular_base_calculo_transbordo(df):
     Returns:
         DataFrame: Tabela Base Calculo com todas as métricas calculadas
     """
+    # Obter operadores e equipamentos excluídos da configuração
+    operadores_excluidos = CONFIG_CALCULOS.get("TT", {}).get("operadores_excluidos", ["9999 - TROCA DE TURNO"])
+    equipamentos_excluidos = CONFIG_CALCULOS.get("TT", {}).get("equipamentos_excluidos", [])
+    
+    # Filtrar equipamentos excluídos
+    df = df[~df['Equipamento'].isin(equipamentos_excluidos)]
+    
     # Extrair combinações únicas de Equipamento, Grupo Equipamento/Frente e Operador
     combinacoes = df[['Equipamento', 'Grupo Equipamento/Frente', 'Operador']].drop_duplicates().reset_index(drop=True)
     
     # Filtrar operadores excluídos
-    combinacoes = combinacoes[~combinacoes['Operador'].isin(OPERADORES_EXCLUIR)]
+    combinacoes = combinacoes[~combinacoes['Operador'].isin(operadores_excluidos)]
     
     # Inicializar as colunas de métricas
     resultados = []
@@ -615,6 +709,10 @@ def calcular_base_calculo_transbordo(df):
                 (df['Operador'] == operador)
         
         dados_filtrados = df[filtro]
+        
+        # Verificar se há dados suficientes para esta combinação
+        if len(dados_filtrados) == 0:
+            continue
         
         # Horas totais - manter mais casas decimais para cálculos intermediários
         horas_totais = round(dados_filtrados['Diferença_Hora'].sum(), 4)
@@ -706,17 +804,23 @@ def calcular_eficiencia_energetica_transbordo(base_calculo):
     
     return pd.DataFrame(resultados)
 
-def calcular_motor_ocioso_transbordo(base_calculo):
+def calcular_motor_ocioso_transbordo(base_calculo, df_base):
     """
     Calcula o percentual de motor ocioso por operador para transbordos.
     
     Args:
         base_calculo (DataFrame): Tabela Base Calculo
+        df_base (DataFrame): DataFrame base processado
     
     Returns:
-        DataFrame: Percentual de motor ocioso por operador
+        DataFrame: Dados de motor ocioso por operador incluindo tempo operação, tempo ocioso e porcentagem
     """
-    # Agrupar por operador
+    # Carregar configuração para saber quais operações devem ser excluídas do cálculo de motor ocioso
+    config = carregar_config_calculos()
+    operacoes_excluidas = config.get("TT", {}).get("motor_ocioso", {}).get("operacoes_excluidas", [])
+    grupos_operacao_excluidos = config.get("TT", {}).get("motor_ocioso", {}).get("grupos_operacao_excluidos", ["Manutenção"])
+    
+    # Agrupar por operador (já filtrado pela função calcular_base_calculo)
     operadores = base_calculo[['Operador', 'Grupo Equipamento/Frente']].drop_duplicates()
     resultados = []
     
@@ -724,18 +828,38 @@ def calcular_motor_ocioso_transbordo(base_calculo):
         operador = row['Operador']
         grupo = row['Grupo Equipamento/Frente']
         
-        # Filtrar dados para este operador e grupo
-        filtro = (base_calculo['Operador'] == operador) & (base_calculo['Grupo Equipamento/Frente'] == grupo)
-        dados_op = base_calculo[filtro]
+        # Filtrar dados base para este operador e grupo
+        filtro_base = (df_base['Operador'] == operador) & (df_base['Grupo Equipamento/Frente'] == grupo)
+        df_operador = df_base[filtro_base].copy()
         
-        # Motor Ocioso = Parado Com Motor Ligado / Motor Ligado
-        parado_motor_sum = round(dados_op['Parado Com Motor Ligado'].sum(), 4)
-        motor_ligado_sum = round(dados_op['Motor Ligado'].sum(), 4)
+        # Filtrar dados - excluir operações específicas ou grupos de operação
+        if operacoes_excluidas:
+            df_operador = df_operador[~df_operador['Operacao'].isin(operacoes_excluidas)]
         
-        percentual = calcular_porcentagem(parado_motor_sum, motor_ligado_sum)
+        if grupos_operacao_excluidos:
+            df_operador = df_operador[~df_operador['Grupo Operacao'].isin(grupos_operacao_excluidos)]
+        
+        # Calcular motor ocioso
+        # Condição de parado com motor ligado: Velocidade = 0, RPM Motor >= 300, Motor Ligado = 1
+        tempo_motor_ligado = round(df_operador[df_operador['Motor Ligado'] == 1]['Diferença_Hora'].sum(), 4)
+        
+        # Parado com Motor Ligado
+        tempo_parado_motor_ligado = round(df_operador[
+            (df_operador['Velocidade'] == 0) & 
+            (df_operador['RPM Motor'] >= 300) & 
+            (df_operador['Motor Ligado'] == 1)
+        ]['Diferença_Hora'].sum(), 4)
+        
+        # Calcular percentual motor ocioso
+        if tempo_motor_ligado > 0:
+            percentual = round(tempo_parado_motor_ligado / tempo_motor_ligado, 4)
+        else:
+            percentual = 0.0
         
         resultados.append({
             'Operador': operador,
+            'Tempo Operação': tempo_motor_ligado,
+            'Tempo Ocioso': tempo_parado_motor_ligado,
             'Porcentagem': percentual
         })
     
@@ -817,87 +941,244 @@ def calcular_uso_gps_transbordo(base_calculo):
 
 def adicionar_planilhas_ao_excel(writer, planilhas_dados, tipo):
     """
-    Adiciona um conjunto de planilhas ao arquivo Excel com prefixos apropriados.
+    Adiciona planilhas ao arquivo Excel e formata células.
     
     Args:
-        writer: O objeto ExcelWriter
-        planilhas_dados: Um dicionário com nome_planilha -> DataFrame
-        tipo: 'CD' para colhedoras ou 'TT' para transbordos
+        writer: ExcelWriter para o arquivo
+        planilhas_dados: Dicionário com os dados a serem adicionados
+        tipo: Tipo de equipamento (CD ou TT)
     """
-    workbook = writer.book
-    
-    # Adicionar cada planilha
-    for nome_planilha, df in planilhas_dados.items():
-        # Adicionar prefixo
-        nome_com_prefixo = f"{tipo}_{nome_planilha}"
+    # Adicionar cada planilha ao Excel
+    for nome_planilha, dados in planilhas_dados.items():
+        # Pular planilhas vazias
+        if dados is None or len(dados) == 0:
+            continue
         
-        # Salvar o DataFrame na planilha
-        df.to_excel(writer, sheet_name=nome_com_prefixo, index=False)
+        # Arredondar valores numéricos para melhor visualização
+        if nome_planilha == "Base Calculo":
+            for col in dados.columns:
+                if col in ['Horas totais', 'Horas Produtivas', 'GPS', 'Motor Ligado', 'Parado Com Motor Ligado', 'Horas elevador']:
+                    dados[col] = dados[col].apply(lambda x: round(float(x), 2) if pd.notnull(x) else x)
+                elif col in ['% Utilização GPS', '% Parado com motor ligado', '% Hora Elevador', '% Eficiência Energética']:
+                    dados[col] = dados[col].apply(lambda x: round(float(x), 4) if pd.notnull(x) else x)
         
-        # Obter a planilha para aplicar formatação
-        worksheet = workbook[nome_com_prefixo]
+        # Arredondar valores para outras planilhas específicas
+        if nome_planilha.startswith("Disponibilidade"):
+            if 'Disponibilidade' in dados.columns:
+                dados['Disponibilidade'] = dados['Disponibilidade'].apply(lambda x: round(float(x), 4) if pd.notnull(x) else x)
         
-        # Aplicar formatação específica com base no tipo de planilha
-        if 'Disponibilidade' in nome_planilha:
-            for row in range(2, worksheet.max_row + 1):
-                cell = worksheet.cell(row=row, column=2)  # Coluna B (Disponibilidade)
-                cell.number_format = '0.00%'
+        if nome_planilha.startswith("Eficiência"):
+            if 'Eficiência' in dados.columns:
+                dados['Eficiência'] = dados['Eficiência'].apply(lambda x: round(float(x), 4) if pd.notnull(x) else x)
+        
+        if nome_planilha.startswith("Hora Elevador"):
+            if 'Horas' in dados.columns:
+                dados['Horas'] = dados['Horas'].apply(lambda x: round(float(x), 2) if pd.notnull(x) else x)
+        
+        if nome_planilha.startswith("Motor Ocioso"):
+            if 'Porcentagem' in dados.columns:
+                dados['Porcentagem'] = dados['Porcentagem'].apply(lambda x: round(float(x), 4) if pd.notnull(x) else x)
+            if 'Tempo Operação' in dados.columns:
+                dados['Tempo Operação'] = dados['Tempo Operação'].apply(lambda x: round(float(x), 2) if pd.notnull(x) else x)
+            if 'Tempo Ocioso' in dados.columns:
+                dados['Tempo Ocioso'] = dados['Tempo Ocioso'].apply(lambda x: round(float(x), 2) if pd.notnull(x) else x)
+        
+        if nome_planilha.startswith("Falta Apontamento") or nome_planilha.startswith("Uso GPS"):
+            if 'Porcentagem' in dados.columns:
+                dados['Porcentagem'] = dados['Porcentagem'].apply(lambda x: round(float(x), 4) if pd.notnull(x) else x)
+        
+        if nome_planilha.startswith("Horas por Frota"):
+            if 'Horas Registradas' in dados.columns:
+                dados['Horas Registradas'] = dados['Horas Registradas'].apply(lambda x: round(float(x), 2) if pd.notnull(x) else x)
+            if 'Diferença para 24h' in dados.columns:
+                dados['Diferença para 24h'] = dados['Diferença para 24h'].apply(lambda x: round(float(x), 2) if pd.notnull(x) else x)
+        
+        # Adicionar a planilha ao Excel
+        dados.to_excel(writer, sheet_name=nome_planilha, index=False)
+        
+        # Aplicar formatação às células
+        worksheet = writer.sheets[nome_planilha]
+        
+        # Aplicar formatação de acordo com o tipo de planilha
+        if nome_planilha.startswith("Disponibilidade"):
+            # Formatar coluna de porcentagem
+            for row in range(2, len(dados) + 2):  # +2 porque Excel começa em 1 e tem cabeçalho
+                cell = worksheet.cell(row=row, column=2)  # Coluna B
+                cell.number_format = '0.00%'  # Formato de porcentagem
+        
+        elif nome_planilha.startswith("Eficiência"):
+            # Formatar coluna de porcentagem
+            for row in range(2, len(dados) + 2):
+                cell = worksheet.cell(row=row, column=2)  # Coluna B
+                cell.number_format = '0.00%'  # Formato de porcentagem
+        
+        elif nome_planilha.startswith("Hora Elevador"):
+            # Formatar coluna de horas
+            for row in range(2, len(dados) + 2):
+                cell = worksheet.cell(row=row, column=2)  # Coluna B
+                cell.number_format = '0.00'  # Formato de número com 2 casas decimais
+        
+        elif nome_planilha.startswith("Motor Ocioso"):
+            # Formatar colunas de tempo e porcentagem
+            for row in range(2, len(dados) + 2):
+                # Tempo Operação (coluna B)
+                cell_tempo_op = worksheet.cell(row=row, column=2)
+                cell_tempo_op.number_format = '0.00'  # Formato decimal com 2 casas
                 
-        elif 'Eficiência' in nome_planilha:
-            for row in range(2, worksheet.max_row + 1):
-                cell = worksheet.cell(row=row, column=2)  # Coluna B (Eficiência)
-                cell.number_format = '0.00%'
+                # Tempo Ocioso (coluna C)
+                cell_tempo_oc = worksheet.cell(row=row, column=3)
+                cell_tempo_oc.number_format = '0.00'  # Formato decimal com 2 casas
                 
-        elif 'Hora Elevador' in nome_planilha:
-            for row in range(2, worksheet.max_row + 1):
-                cell = worksheet.cell(row=row, column=2)  # Coluna B (Horas)
-                cell.number_format = '0.00'
-                
-        elif 'Motor Ocioso' in nome_planilha or 'Uso GPS' in nome_planilha or 'Falta de Apontamento' in nome_planilha:
-            for row in range(2, worksheet.max_row + 1):
-                cell = worksheet.cell(row=row, column=2)  # Coluna B (Porcentagem)
-                cell.number_format = '0.00%'
-                
-        elif 'Horas por Frota' in nome_planilha:
-            for row in range(2, worksheet.max_row + 1):
+                # Porcentagem (coluna D)
+                cell_porc = worksheet.cell(row=row, column=4)
+                cell_porc.number_format = '0.00%'  # Formato de porcentagem com 2 casas
+        
+        elif nome_planilha.startswith("Falta Apontamento") or nome_planilha.startswith("Uso GPS"):
+            # Formatar coluna de porcentagem
+            for row in range(2, len(dados) + 2):
+                cell = worksheet.cell(row=row, column=2)  # Coluna B
+                cell.number_format = '0.00%'  # Formato de porcentagem
+        
+        elif nome_planilha.startswith("Horas por Frota"):
+            # Formatar colunas de horas
+            for row in range(2, len(dados) + 2):
                 cell_b = worksheet.cell(row=row, column=2)  # Coluna B (Horas Registradas)
-                cell_b.number_format = '0.00'
-                cell_c = worksheet.cell(row=row, column=3)  # Coluna C (Diferença para 24h)
-                cell_c.number_format = '0.00'
+                cell_b.number_format = '0.00'  # Formato de número com 2 casas decimais
                 
-        elif 'Base Calculo' in nome_planilha:
-            # Formatar colunas de Base Calculo conforme o tipo
-            if tipo == 'CD':  # Colhedoras
-                for row in range(2, worksheet.max_row + 1):
-                    # Formatar colunas decimais
-                    columns_decimal = [4, 5, 7, 8, 10, 12]
-                    for col in columns_decimal:
-                        if col <= worksheet.max_column:
-                            cell = worksheet.cell(row=row, column=col)
-                            cell.number_format = '0.00'
-                    
-                    # Formatar colunas de porcentagem
-                    columns_percent = [6, 9, 11, 13]
-                    for col in columns_percent:
-                        if col <= worksheet.max_column:
-                            cell = worksheet.cell(row=row, column=col)
-                            cell.number_format = '0.00%'
+                cell_c = worksheet.cell(row=row, column=3)  # Coluna C (Diferença para 24h)
+                cell_c.number_format = '0.00'  # Formato de número com 2 casas decimais
+
+def calcular_eficiencia_operacional(df):
+    """
+    Calcula a eficiência operacional para cada equipamento.
+    
+    Args:
+        df (DataFrame): DataFrame processado
+    
+    Returns:
+        DataFrame: Eficiência operacional por equipamento
+    """
+    # Determinar o tipo de equipamento (CD ou TT) com base nas colunas
+    tipo_equipamento = "CD" if "Parada com Motor Ligado" in df.columns else "TT"
+    
+    # Obter operadores e equipamentos excluídos da configuração
+    operadores_excluidos = CONFIG_CALCULOS.get(tipo_equipamento, {}).get("operadores_excluidos", ["9999 - TROCA DE TURNO"])
+    equipamentos_excluidos = CONFIG_CALCULOS.get(tipo_equipamento, {}).get("equipamentos_excluidos", [])
+    
+    # Filtramos os dados excluindo os operadores e equipamentos da configuração
+    df_filtrado = df[~df['Operador'].isin(operadores_excluidos)]
+    df_filtrado = df_filtrado[~df_filtrado['Equipamento'].isin(equipamentos_excluidos)]
+    
+    # Agrupar por Equipamento e calcular horas por grupo operacional
+    equipamentos = df_filtrado['Equipamento'].unique()
+    resultados = []
+    
+    for equipamento in equipamentos:
+        dados_equip = df_filtrado[df_filtrado['Equipamento'] == equipamento]
+        total_horas = round(dados_equip['Diferença_Hora'].sum(), 4)
+        
+        # Calcular horas produtivas (Colheita) ou Efetivas (Transbordamento)
+        if tipo_equipamento == "CD":
+            tempo_produtivo = round(dados_equip[dados_equip['Grupo Operacao'] == 'Colheita']['Diferença_Hora'].sum(), 4)
+        else:  # TT
+            tempo_produtivo = round(dados_equip[dados_equip['Grupo Operacao'] == 'Transbordamento']['Diferença_Hora'].sum(), 4)
+        
+        # A eficiência operacional é o percentual do tempo produtivo
+        eficiencia = calcular_porcentagem(tempo_produtivo, total_horas)
+        
+        resultados.append({
+            'Frota': equipamento,
+            'Eficiencia': eficiencia
+        })
+    
+    return pd.DataFrame(resultados)
+
+def calcular_metricas_por_equipamento(df):
+    """
+    Calcula várias métricas por equipamento.
+    
+    Args:
+        df (DataFrame): DataFrame com dados processados
+        
+    Returns:
+        DataFrame: Métricas por equipamento
+    """
+    # Determinar o tipo de equipamento (CD ou TT) com base nas colunas
+    tipo_equipamento = "CD" if "Parada com Motor Ligado" in df.columns else "TT"
+    
+    # Obter operadores e equipamentos excluídos da configuração
+    operadores_excluidos = CONFIG_CALCULOS.get(tipo_equipamento, {}).get("operadores_excluidos", ["9999 - TROCA DE TURNO"])
+    equipamentos_excluidos = CONFIG_CALCULOS.get(tipo_equipamento, {}).get("equipamentos_excluidos", [])
+    
+    # Filtramos os dados excluindo os operadores e equipamentos da configuração
+    df_filtrado = df[~df['Operador'].isin(operadores_excluidos)]
+    df_filtrado = df_filtrado[~df_filtrado['Equipamento'].isin(equipamentos_excluidos)]
+    
+    # Agrupar por Equipamento e calcular métricas
+    resultados = []
+    equipamentos = df_filtrado['Equipamento'].unique()
+    
+    for equipamento in equipamentos:
+        dados_equip = df_filtrado[df_filtrado['Equipamento'] == equipamento]
+        total_horas = round(dados_equip['Diferença_Hora'].sum(), 4)
+        
+        # Calcular métricas específicas por tipo de equipamento
+        if tipo_equipamento == "CD":
+            # Para Colhedoras
+            colheita = round(dados_equip[dados_equip['Grupo Operacao'] == 'Colheita']['Diferença_Hora'].sum(), 4)
+            manutencao = round(dados_equip[dados_equip['Grupo Operacao'] == 'Manutenção']['Diferença_Hora'].sum(), 4)
+            abastecimento = round(dados_equip[dados_equip['Grupo Operacao'] == 'Abastecimento']['Diferença_Hora'].sum(), 4)
+            manobra = round(dados_equip[dados_equip['Grupo Operacao'] == 'Manobra']['Diferença_Hora'].sum(), 4)
+            transito = round(dados_equip[dados_equip['Grupo Operacao'] == 'Transito']['Diferença_Hora'].sum(), 4)
+            outros = total_horas - (colheita + manutencao + abastecimento + manobra + transito)
             
-            else:  # Transbordos
-                for row in range(2, worksheet.max_row + 1):
-                    # Formatar colunas decimais
-                    columns_decimal = [4, 5, 6, 8, 9, 11]
-                    for col in columns_decimal:
-                        if col <= worksheet.max_column:
-                            cell = worksheet.cell(row=row, column=col)
-                            cell.number_format = '0.00'
-                    
-                    # Formatar colunas de porcentagem
-                    columns_percent = [7, 10, 12]
-                    for col in columns_percent:
-                        if col <= worksheet.max_column:
-                            cell = worksheet.cell(row=row, column=col)
-                            cell.number_format = '0.00%'
+            eficiencia = calcular_porcentagem(colheita, total_horas)
+            disponibilidade = calcular_porcentagem(total_horas - manutencao, total_horas)
+            utilizacao = calcular_porcentagem(colheita, total_horas - manutencao)
+            
+            # Adicionar aos resultados
+            resultados.append({
+                'Equipamento': equipamento,
+                'Total Horas': total_horas,
+                'Colheita': colheita,
+                'Manutenção': manutencao,
+                'Abastecimento': abastecimento,
+                'Manobra': manobra,
+                'Transito': transito,
+                'Outros': outros,
+                'Eficiência': eficiencia,
+                'Disponibilidade': disponibilidade,
+                'Utilização': utilizacao
+            })
+        else:
+            # Para Transbordos
+            transbordamento = round(dados_equip[dados_equip['Grupo Operacao'] == 'Transbordamento']['Diferença_Hora'].sum(), 4)
+            manutencao = round(dados_equip[dados_equip['Grupo Operacao'] == 'Manutenção']['Diferença_Hora'].sum(), 4)
+            abastecimento = round(dados_equip[dados_equip['Grupo Operacao'] == 'Abastecimento']['Diferença_Hora'].sum(), 4)
+            paradas = round(dados_equip[dados_equip['Grupo Operacao'] == 'Paradas']['Diferença_Hora'].sum(), 4)
+            transito = round(dados_equip[dados_equip['Grupo Operacao'] == 'Transito']['Diferença_Hora'].sum(), 4)
+            outros = total_horas - (transbordamento + manutencao + abastecimento + paradas + transito)
+            
+            eficiencia = calcular_porcentagem(transbordamento, total_horas)
+            disponibilidade = calcular_porcentagem(total_horas - manutencao, total_horas)
+            utilizacao = calcular_porcentagem(transbordamento, total_horas - manutencao)
+            
+            # Adicionar aos resultados
+            resultados.append({
+                'Equipamento': equipamento,
+                'Total Horas': total_horas,
+                'Transbordamento': transbordamento,
+                'Manutenção': manutencao,
+                'Abastecimento': abastecimento,
+                'Paradas': paradas,
+                'Transito': transito,
+                'Outros': outros,
+                'Eficiência': eficiencia,
+                'Disponibilidade': disponibilidade,
+                'Utilização': utilizacao
+            })
+    
+    return pd.DataFrame(resultados)
 
 def processar_arquivos_unificados():
     """
@@ -989,7 +1270,7 @@ def processar_arquivos_unificados():
         disp_mecanica = calcular_disponibilidade_mecanica(df_base_filtrado)
         eficiencia_energetica = calcular_eficiencia_energetica_colhedora(base_calculo)
         hora_elevador = calcular_hora_elevador(df_base_filtrado, base_calculo)
-        motor_ocioso = calcular_motor_ocioso_colhedora(base_calculo)
+        motor_ocioso = calcular_motor_ocioso_colhedora(base_calculo, df_base_filtrado)
         uso_gps = calcular_uso_gps_colhedora(df_base_filtrado, base_calculo)
         horas_por_frota = calcular_horas_por_frota(df_base_filtrado)
         
@@ -1073,7 +1354,7 @@ def processar_arquivos_unificados():
         # Calcular as métricas auxiliares
         disp_mecanica = calcular_disponibilidade_mecanica(df_base_filtrado)
         eficiencia_energetica = calcular_eficiencia_energetica_transbordo(base_calculo)
-        motor_ocioso = calcular_motor_ocioso_transbordo(base_calculo)
+        motor_ocioso = calcular_motor_ocioso_transbordo(base_calculo, df_base_filtrado)
         falta_apontamento = calcular_falta_apontamento(base_calculo)
         uso_gps = calcular_uso_gps_transbordo(base_calculo)
         horas_por_frota = calcular_horas_por_frota(df_base_filtrado)
