@@ -1,12 +1,16 @@
 """
 Script para processamento completo de dados de monitoramento de transbordos.
 Lê arquivos TXT ou CSV na pasta raiz, processa-os e gera arquivos Excel com planilhas auxiliares prontas.
+Também processa arquivos ZIP contendo TXT ou CSV.
 """
 
 import pandas as pd
 import numpy as np
 import os
 import glob
+import zipfile
+import tempfile
+import shutil
 from pathlib import Path
 from datetime import datetime
 from openpyxl import Workbook
@@ -616,10 +620,75 @@ def criar_excel_com_planilhas(df_base, base_calculo, disp_mecanica, eficiencia_e
     writer.close()
     print(f"Arquivo Excel salvo com sucesso em {caminho_saida}")
 
+def extrair_arquivo_zip(caminho_zip, pasta_destino=None):
+    """
+    Extrai o conteúdo de um arquivo ZIP para uma pasta temporária ou destino especificado.
+    Renomeia os arquivos extraídos para terem o mesmo nome do arquivo ZIP original.
+    
+    Args:
+        caminho_zip (str): Caminho para o arquivo ZIP
+        pasta_destino (str, optional): Pasta onde os arquivos serão extraídos.
+                                       Se None, usa uma pasta temporária.
+    
+    Returns:
+        list: Lista de caminhos dos arquivos extraídos e renomeados (apenas TXT e CSV)
+        str: Caminho da pasta temporária (se criada) ou None
+    """
+    # Se pasta_destino não foi especificada, criar uma pasta temporária
+    pasta_temp = None
+    if pasta_destino is None:
+        pasta_temp = tempfile.mkdtemp()
+        pasta_destino = pasta_temp
+    
+    arquivos_extraidos = []
+    nome_zip_sem_extensao = os.path.splitext(os.path.basename(caminho_zip))[0]
+    
+    try:
+        with zipfile.ZipFile(caminho_zip, 'r') as zip_ref:
+            # Extrair todos os arquivos do ZIP
+            zip_ref.extractall(pasta_destino)
+            
+            # Processar cada arquivo extraído (apenas TXT e CSV)
+            for arquivo in zip_ref.namelist():
+                caminho_completo = os.path.join(pasta_destino, arquivo)
+                # Verificar se é um arquivo e não uma pasta
+                if os.path.isfile(caminho_completo):
+                    # Verificar extensão
+                    extensao = os.path.splitext(arquivo)[1].lower()
+                    if extensao in ['.txt', '.csv']:
+                        # Criar novo nome: nome do ZIP + extensão original
+                        novo_nome = f"{nome_zip_sem_extensao}{extensao}"
+                        novo_caminho = os.path.join(pasta_destino, novo_nome)
+                        
+                        # Renomear o arquivo extraído
+                        try:
+                            # Se já existe um arquivo com esse nome, remover primeiro
+                            if os.path.exists(novo_caminho):
+                                os.remove(novo_caminho)
+                            # Renomear o arquivo
+                            os.rename(caminho_completo, novo_caminho)
+                            arquivos_extraidos.append(novo_caminho)
+                            print(f"Arquivo extraído renomeado: {novo_nome}")
+                        except Exception as e:
+                            print(f"Erro ao renomear arquivo {arquivo} para {novo_nome}: {str(e)}")
+                            arquivos_extraidos.append(caminho_completo)  # Adicionar o caminho original em caso de erro
+        
+        return arquivos_extraidos, pasta_temp
+    
+    except Exception as e:
+        print(f"Erro ao extrair o arquivo ZIP {caminho_zip}: {str(e)}")
+        # Se houve erro e criamos uma pasta temporária, tentar limpá-la
+        if pasta_temp:
+            try:
+                shutil.rmtree(pasta_temp)
+            except:
+                pass
+        return [], None
+
 def processar_todos_arquivos():
     """
-    Processa todos os arquivos TXT ou CSV de transbordos nas pastas dados e dados/transbordos.
-    Busca arquivos que começam com "RV Transbordo", "frente" e "transbordos" com extensão .csv ou .txt.
+    Processa todos os arquivos TXT, CSV ou ZIP de transbordos nas pastas dados e dados/transbordos.
+    Busca arquivos que começam com "RV Transbordo", "frente" e "transbordos" com extensão .csv, .txt ou .zip.
     Ignora arquivos que contenham "colhedora" no nome.
     """
     # Obter o diretório onde está o script
@@ -644,8 +713,9 @@ def processar_todos_arquivos():
     # Lista de diretórios para buscar arquivos
     diretorios_busca = [diretorio_dados, diretorio_transbordos]
     
-    # Encontrar todos os arquivos TXT/CSV de transbordos em ambos os diretórios
+    # Encontrar todos os arquivos TXT/CSV/ZIP de transbordos em ambos os diretórios
     arquivos = []
+    arquivos_zip = []
     
     for diretorio in diretorios_busca:
         # Adicionar arquivos TXT sempre
@@ -660,68 +730,115 @@ def processar_todos_arquivos():
             arquivos += glob.glob(os.path.join(diretorio, "*transbordo*.csv"))
             arquivos += glob.glob(os.path.join(diretorio, "frente*transbordos*.csv"))
             arquivos += glob.glob(os.path.join(diretorio, "transbordo*.csv"))
+        
+        # Adicionar arquivos ZIP
+        arquivos_zip += glob.glob(os.path.join(diretorio, "RV Transbordo*.zip"))
+        arquivos_zip += glob.glob(os.path.join(diretorio, "*transbordo*.zip"))
+        arquivos_zip += glob.glob(os.path.join(diretorio, "frente*transbordos*.zip"))
+        arquivos_zip += glob.glob(os.path.join(diretorio, "transbordo*.zip"))
     
     # Filtrar arquivos que contenham "colhedora" no nome (case insensitive)
     arquivos = [arquivo for arquivo in arquivos if "colhedora" not in os.path.basename(arquivo).lower()]
+    arquivos_zip = [arquivo for arquivo in arquivos_zip if "colhedora" not in os.path.basename(arquivo).lower()]
     
     # Remover possíveis duplicatas
     arquivos = list(set(arquivos))
+    arquivos_zip = list(set(arquivos_zip))
     
-    if not arquivos:
+    if not arquivos and not arquivos_zip:
         print("Nenhum arquivo de transbordos encontrado nas pastas dados ou dados/transbordos!")
         return
     
-    print(f"Encontrados {len(arquivos)} arquivos de transbordos para processar.")
+    print(f"Encontrados {len(arquivos)} arquivos de transbordos (TXT/CSV) para processar.")
+    print(f"Encontrados {len(arquivos_zip)} arquivos ZIP de transbordos para processar.")
     
-    # Processar cada arquivo
+    # Processar cada arquivo TXT/CSV
     for arquivo in arquivos:
-        # Obter apenas o nome do arquivo (sem caminho e sem extensão)
-        nome_base = os.path.splitext(os.path.basename(arquivo))[0]
+        processar_arquivo(arquivo, diretorio_saida)
+    
+    # Processar cada arquivo ZIP
+    for arquivo_zip in arquivos_zip:
+        print(f"\nProcessando arquivo ZIP: {os.path.basename(arquivo_zip)}")
         
-        # Nome de saída igual ao original, mas com extensão .xlsx na pasta output
-        arquivo_saida = os.path.join(diretorio_saida, f"{nome_base}.xlsx")
+        # Extrair arquivo ZIP para pasta temporária
+        arquivos_extraidos, pasta_temp = extrair_arquivo_zip(arquivo_zip)
         
-        print(f"\nProcessando arquivo: {os.path.basename(arquivo)}")
-        print(f"Arquivo de saída: {os.path.basename(arquivo_saida)}")
-        
-        # Processar o arquivo base
-        df_base = processar_arquivo_base(arquivo)
-        if df_base is None:
-            print(f"Erro ao processar {os.path.basename(arquivo)}. Pulando para o próximo arquivo.")
+        if not arquivos_extraidos:
+            print(f"Nenhum arquivo TXT ou CSV encontrado no ZIP {os.path.basename(arquivo_zip)}")
             continue
         
-        # Se o DataFrame estiver vazio, gerar apenas a planilha BASE
-        if len(df_base) == 0:
-            writer = pd.ExcelWriter(arquivo_saida, engine='openpyxl')
-            df_base.to_excel(writer, sheet_name='BASE', index=False)
-            writer.close()
-            print(f"Arquivo {arquivo_saida} gerado com apenas a planilha BASE (sem dados).")
-            continue
+        print(f"Extraídos {len(arquivos_extraidos)} arquivos do ZIP.")
         
-        # Calcular a Base Calculo
-        base_calculo = calcular_base_calculo(df_base)
+        # Processar cada arquivo extraído
+        for arquivo_extraido in arquivos_extraidos:
+            # Filtrar arquivos que contenham "colhedora" no nome
+            if "colhedora" not in os.path.basename(arquivo_extraido).lower():
+                processar_arquivo(arquivo_extraido, diretorio_saida)
         
-        # Calcular as métricas auxiliares
-        disp_mecanica = calcular_disponibilidade_mecanica(df_base)
-        eficiencia_energetica = calcular_eficiencia_energetica(base_calculo)
-        motor_ocioso = calcular_motor_ocioso(base_calculo)
-        falta_apontamento = calcular_falta_apontamento(base_calculo)
-        uso_gps = calcular_uso_gps(base_calculo)
-        horas_por_frota = calcular_horas_por_frota(df_base)
-        
-        # Criar o arquivo Excel com todas as planilhas
-        criar_excel_com_planilhas(
-            df_base, base_calculo, disp_mecanica, eficiencia_energetica,
-            motor_ocioso, falta_apontamento, uso_gps, horas_por_frota, arquivo_saida
-        )
-        
-        print(f"Arquivo {arquivo_saida} gerado com sucesso!")
+        # Limpar pasta temporária se foi criada
+        if pasta_temp:
+            try:
+                shutil.rmtree(pasta_temp)
+                print(f"Pasta temporária removida: {pasta_temp}")
+            except Exception as e:
+                print(f"Erro ao remover pasta temporária {pasta_temp}: {str(e)}")
+
+def processar_arquivo(caminho_arquivo, diretorio_saida):
+    """
+    Processa um único arquivo e gera o Excel de saída.
+    
+    Args:
+        caminho_arquivo (str): Caminho do arquivo a ser processado
+        diretorio_saida (str): Diretório onde o arquivo de saída será salvo
+    """
+    # Obter apenas o nome do arquivo (sem caminho e sem extensão)
+    nome_base = os.path.splitext(os.path.basename(caminho_arquivo))[0]
+    
+    # Nome de saída igual ao original, mas com extensão .xlsx na pasta output
+    arquivo_saida = os.path.join(diretorio_saida, f"{nome_base}.xlsx")
+    
+    print(f"\nProcessando arquivo: {os.path.basename(caminho_arquivo)}")
+    print(f"Arquivo de saída: {os.path.basename(arquivo_saida)}")
+    
+    # Processar o arquivo base
+    df_base = processar_arquivo_base(caminho_arquivo)
+    if df_base is None:
+        print(f"Erro ao processar {os.path.basename(caminho_arquivo)}. Pulando para o próximo arquivo.")
+        return
+    
+    # Se o DataFrame estiver vazio, gerar apenas a planilha BASE
+    if len(df_base) == 0:
+        writer = pd.ExcelWriter(arquivo_saida, engine='openpyxl')
+        df_base.to_excel(writer, sheet_name='BASE', index=False)
+        writer.close()
+        print(f"Arquivo {arquivo_saida} gerado com apenas a planilha BASE (sem dados).")
+        return
+    
+    # Calcular a Base Calculo
+    base_calculo = calcular_base_calculo(df_base)
+    
+    # Calcular as métricas auxiliares
+    disp_mecanica = calcular_disponibilidade_mecanica(df_base)
+    eficiencia_energetica = calcular_eficiencia_energetica(base_calculo)
+    motor_ocioso = calcular_motor_ocioso(base_calculo)
+    falta_apontamento = calcular_falta_apontamento(base_calculo)
+    uso_gps = calcular_uso_gps(base_calculo)
+    horas_por_frota = calcular_horas_por_frota(df_base)
+    
+    # Criar o arquivo Excel com todas as planilhas
+    criar_excel_com_planilhas(
+        df_base, base_calculo, disp_mecanica, eficiencia_energetica,
+        motor_ocioso, falta_apontamento, uso_gps, horas_por_frota, arquivo_saida
+    )
+    
+    print(f"Arquivo {arquivo_saida} gerado com sucesso!")
 
 if __name__ == "__main__":
     print("="*80)
     print("Iniciando processamento de arquivos de transbordos...")
     print(f"Processamento de arquivos CSV: {'ATIVADO' if processCsv else 'DESATIVADO'}")
     print("Este script processa arquivos de transbordos e gera planilhas Excel com métricas")
+    print("Suporta arquivos TXT, CSV e ZIP")
     print("Ignorando arquivos que contenham 'colhedora' no nome")
     print("="*80)
     processar_todos_arquivos()
