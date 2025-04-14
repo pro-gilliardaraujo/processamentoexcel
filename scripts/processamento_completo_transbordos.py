@@ -11,11 +11,13 @@ import glob
 import zipfile
 import tempfile
 import shutil
+import json
 from pathlib import Path
 from datetime import datetime
 from openpyxl import Workbook
 from openpyxl.utils.dataframe import dataframe_to_rows
 from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
+from openpyxl.utils import get_column_letter
 
 # Configurações
 processCsv = True  # Altere para True quando quiser processar arquivos CSV
@@ -42,6 +44,63 @@ COLUNAS_DESEJADAS = [
 
 # Valores a serem filtrados
 OPERADORES_EXCLUIR = ["9999 - TROCA DE TURNO"]
+
+def substituir_operadores(df):
+    """
+    Substitui operadores com base nas entradas de um arquivo JSON.
+    
+    Args:
+        df (DataFrame): DataFrame com os dados dos operadores
+        
+    Returns:
+        DataFrame: DataFrame com os operadores substituídos
+    """
+    # Verificar se a coluna 'Operador' existe no DataFrame
+    if 'Operador' not in df.columns:
+        print("Aviso: Coluna 'Operador' não encontrada no DataFrame, ignorando substituições.")
+        return df
+    
+    # Caminho do arquivo JSON de substituições
+    diretorio_script = os.path.dirname(os.path.abspath(__file__))
+    diretorio_raiz = os.path.dirname(diretorio_script)
+    arquivo_json = os.path.join(diretorio_raiz, "substituiroperadores.json")
+    
+    # Verificar se o arquivo JSON existe
+    if not os.path.exists(arquivo_json):
+        print(f"Arquivo {arquivo_json} não encontrado. Continuando sem substituições.")
+        return df
+    
+    try:
+        # Ler o arquivo JSON
+        with open(arquivo_json, 'r', encoding='utf-8') as f:
+            dados_json = json.load(f)
+        
+        # Verificar se há entradas de substituição
+        if not dados_json or not isinstance(dados_json, list):
+            print("Arquivo JSON vazio ou em formato inválido. Continuando sem substituições.")
+            return df
+        
+        # Aplicar as substituições
+        for substituicao in dados_json:
+            if 'operador_origem' in substituicao and 'operador_destino' in substituicao:
+                operador_origem = substituicao['operador_origem']
+                operador_destino = substituicao['operador_destino']
+                
+                # Verificar se o operador de origem existe no DataFrame
+                if operador_origem in df['Operador'].values:
+                    registros_origem = df['Operador'] == operador_origem
+                    total_registros = registros_origem.sum()
+                    
+                    print(f"Substituindo {total_registros} registros do operador '{operador_origem}' para '{operador_destino}'")
+                    
+                    # Realizar a substituição
+                    df.loc[registros_origem, 'Operador'] = operador_destino
+        
+        return df
+        
+    except Exception as e:
+        print(f"Erro ao processar o arquivo JSON de substituições: {str(e)}")
+        return df
 
 def processar_arquivo_base(caminho_arquivo):
     """
@@ -139,6 +198,9 @@ def processar_arquivo_base(caminho_arquivo):
             # Limpeza e organização das colunas
             df = df.drop(columns=COLUNAS_REMOVER, errors='ignore')
             
+            # Aplicar substituição de operadores
+            df = substituir_operadores(df)
+            
             # Garantir que todas as colunas desejadas existam
             for col in COLUNAS_DESEJADAS:
                 if col not in df.columns:
@@ -213,7 +275,8 @@ def calcular_base_calculo(df):
         # % Utilização GPS (em decimal 0-1)
         utilizacao_gps = calcular_porcentagem(gps, horas_produtivas)
         
-        # Motor Ligado - CORREÇÃO: Soma das Diferença_Hora quando Motor Ligado = 1
+        # CORREÇÃO: Motor Ligado - Soma das Diferença_Hora quando Motor Ligado = 1
+        # Mantendo consistência com as horas totais
         motor_ligado = round(dados_filtrados[dados_filtrados['Motor Ligado'] == 1]['Diferença_Hora'].sum(), 4)
         
         # Parado com Motor Ligado
@@ -240,7 +303,7 @@ def calcular_base_calculo(df):
             'Equipamento': equipamento,
             'Grupo Equipamento/Frente': grupo,
             'Operador': operador,
-            'Horas totais': horas_totais,
+            'Horas Totais': horas_totais,
             'Horas Produtivas': horas_produtivas,
             'GPS': gps,
             '% Utilização GPS': utilizacao_gps,
@@ -356,7 +419,7 @@ def calcular_eficiencia_energetica(base_calculo):
         
         # Eficiência Energética para transbordos = Horas Produtivas / Horas Totais (ajustado para corresponder ao Excel)
         horas_produtivas_sum = round(dados_op['Horas Produtivas'].sum(), 4)
-        horas_totais_sum = round(dados_op['Horas totais'].sum(), 4)
+        horas_totais_sum = round(dados_op['Horas Totais'].sum(), 4)
         
         # Calcular eficiência - já está em decimal, não precisa multiplicar por 100
         eficiencia = calcular_porcentagem(horas_produtivas_sum, horas_totais_sum)
@@ -407,13 +470,20 @@ def calcular_motor_ocioso(base_calculo):
         # Isso corresponde à fórmula do Excel: =SEERRO(H3/G3;"SEM DADOS")
         # onde H3 é o valor de "Parado Com Motor Ligado" e G3 é o valor de "Motor Ligado"
         parado_motor_sum = round(dados_op['Parado Com Motor Ligado'].sum(), 4)
+        
+        # Calculamos as horas totais para exibição no relatório
+        horas_totais_sum = round(dados_op['Horas Totais'].sum(), 4)
+        
+        # Calculamos o motor ligado para o cálculo da porcentagem
         motor_ligado_sum = round(dados_op['Motor Ligado'].sum(), 4)
         
-        # Se o motor ligado for zero, retornar "SEM DADOS" (representado como zero aqui)
+        # O percentual é calculado como Parado Com Motor Ligado / Motor Ligado
         percentual = calcular_porcentagem(parado_motor_sum, motor_ligado_sum)
         
         resultados.append({
             'Operador': operador,
+            'Horas Totais': horas_totais_sum,
+            'Tempo Ocioso': parado_motor_sum,
             'Porcentagem': percentual
         })
     
@@ -527,7 +597,7 @@ def criar_excel_com_planilhas(df_base, base_calculo, disp_mecanica, eficiencia_e
     
     # Arredondamento fixo para 2 casas decimais em todas as colunas numéricas antes de exportar
     # Base Calculo - garantir que todas as colunas numéricas tenham 2 casas decimais
-    colunas_numericas = ['Horas totais', 'Horas Produtivas', 'GPS', '% Utilização GPS', 
+    colunas_numericas = ['Horas Totais', 'Horas Produtivas', 'GPS', '% Utilização GPS', 
                          'Motor Ligado', 'Parado Com Motor Ligado', '% Parado com motor ligado',
                          'Falta de Apontamento', '% Falta de Apontamento']
     
@@ -538,7 +608,12 @@ def criar_excel_com_planilhas(df_base, base_calculo, disp_mecanica, eficiencia_e
     # Arredondar valores nas outras planilhas
     disp_mecanica['Disponibilidade'] = disp_mecanica['Disponibilidade'].apply(lambda x: round(x, 4))
     eficiencia_energetica['Eficiência'] = eficiencia_energetica['Eficiência'].apply(lambda x: round(x, 4))
+    
+    # CORREÇÃO: Garantir formatação consistente das horas no Motor Ocioso
+    motor_ocioso['Horas Totais'] = motor_ocioso['Horas Totais'].apply(lambda x: round(x, 2))
+    motor_ocioso['Tempo Ocioso'] = motor_ocioso['Tempo Ocioso'].apply(lambda x: round(x, 2))
     motor_ocioso['Porcentagem'] = motor_ocioso['Porcentagem'].apply(lambda x: round(x, 4))
+    
     falta_apontamento['Porcentagem'] = falta_apontamento['Porcentagem'].apply(lambda x: round(x, 4))
     uso_gps['Porcentagem'] = uso_gps['Porcentagem'].apply(lambda x: round(x, 4))
     horas_por_frota['Horas Registradas'] = horas_por_frota['Horas Registradas'].apply(lambda x: round(x, 2))
@@ -574,8 +649,17 @@ def criar_excel_com_planilhas(df_base, base_calculo, disp_mecanica, eficiencia_e
     # Formatar planilha de Motor Ocioso
     worksheet = workbook['3_Motor Ocioso']
     for row in range(2, worksheet.max_row + 1):
-        cell = worksheet.cell(row=row, column=2)  # Coluna B (Porcentagem)
-        cell.number_format = '0.00%'  # Formato de porcentagem com 2 casas
+        # Formatar coluna B (Horas Totais) - Formato decimal com 2 casas
+        cell_b = worksheet.cell(row=row, column=2)
+        cell_b.number_format = '0.00'
+        
+        # Formatar coluna C (Tempo Ocioso) - Formato decimal com 2 casas
+        cell_c = worksheet.cell(row=row, column=3)
+        cell_c.number_format = '0.00'
+        
+        # Formatar coluna D (Porcentagem)
+        cell_d = worksheet.cell(row=row, column=4)
+        cell_d.number_format = '0.00%'  # Formato de porcentagem com 2 casas
     
     # Formatar planilha de Falta de Apontamento
     worksheet = workbook['4_Falta de Apontamento']
@@ -593,7 +677,7 @@ def criar_excel_com_planilhas(df_base, base_calculo, disp_mecanica, eficiencia_e
     worksheet = workbook['Base Calculo']
     for row in range(2, worksheet.max_row + 1):
         # Formatar colunas decimais
-        columns_decimal = [4, 5, 6, 8, 9, 11]  # Colunas D, E, F, H, I, K (Horas totais, Horas Produtivas, etc.)
+        columns_decimal = [4, 5, 6, 8, 9, 11]  # Colunas D, E, F, H, I, K (Horas Totais, Horas Produtivas, etc.)
         for col in columns_decimal:
             if col <= worksheet.max_column:
                 cell = worksheet.cell(row=row, column=col)
