@@ -1,0 +1,161 @@
+[1mdiff --cc scripts/processamento_completo_transbordos.py[m
+[1mindex 9d508db,091afef..0000000[m
+[1m--- a/scripts/processamento_completo_transbordos.py[m
+[1m+++ b/scripts/processamento_completo_transbordos.py[m
+[36m@@@ -7,7 -8,9 +8,10 @@@[m [mimport pandas as p[m
+  import numpy as np[m
+  import os[m
+  import glob[m
+[32m +import json[m
+[32m+ import zipfile[m
+[32m+ import tempfile[m
+[32m+ import shutil[m
+  from pathlib import Path[m
+  from datetime import datetime[m
+  from openpyxl import Workbook[m
+[36m@@@ -788,65 -749,96 +866,104 @@@[m [mdef processar_todos_arquivos()[m
+          print("Nenhum arquivo de transbordos encontrado nas pastas dados ou dados/transbordos!")[m
+          return[m
+      [m
+[31m-     print(f"Encontrados {len(arquivos)} arquivos de transbordos para processar.")[m
+[32m+     print(f"Encontrados {len(arquivos)} arquivos de transbordos (TXT/CSV) para processar.")[m
+[32m+     print(f"Encontrados {len(arquivos_zip)} arquivos ZIP de transbordos para processar.")[m
+      [m
+[31m-     # Processar cada arquivo[m
+[32m+     # Processar cada arquivo TXT/CSV[m
+      for arquivo in arquivos:[m
+[31m-         # Obter apenas o nome do arquivo (sem caminho e sem extensão)[m
+[31m-         nome_base = os.path.splitext(os.path.basename(arquivo))[0][m
+[31m-         [m
+[31m-         # Nome de saída igual ao original, mas com extensão .xlsx na pasta output[m
+[31m-         arquivo_saida = os.path.join(diretorio_saida, f"{nome_base}.xlsx")[m
+[31m-         [m
+[31m-         print(f"\nProcessando arquivo: {os.path.basename(arquivo)}")[m
+[31m-         print(f"Arquivo de saída: {os.path.basename(arquivo_saida)}")[m
+[32m+         processar_arquivo(arquivo, diretorio_saida)[m
+[32m+     [m
+[32m+     # Processar cada arquivo ZIP[m
+[32m+     for arquivo_zip in arquivos_zip:[m
+[32m+         print(f"\nProcessando arquivo ZIP: {os.path.basename(arquivo_zip)}")[m
+          [m
+[31m-         # Processar o arquivo base[m
+[31m-         df_base = processar_arquivo_base(arquivo)[m
+[31m-         if df_base is None:[m
+[31m-             print(f"Erro ao processar {os.path.basename(arquivo)}. Pulando para o próximo arquivo.")[m
+[31m-             continue[m
+[32m+         # Extrair arquivo ZIP para pasta temporária[m
+[32m+         arquivos_extraidos, pasta_temp = extrair_arquivo_zip(arquivo_zip)[m
+          [m
+[31m-         # Se o DataFrame estiver vazio, gerar apenas a planilha BASE[m
+[31m-         if len(df_base) == 0:[m
+[31m-             writer = pd.ExcelWriter(arquivo_saida, engine='openpyxl')[m
+[31m-             df_base.to_excel(writer, sheet_name='BASE', index=False)[m
+[31m-             writer.close()[m
+[31m-             print(f"Arquivo {arquivo_saida} gerado com apenas a planilha BASE (sem dados).")[m
+[32m+         if not arquivos_extraidos:[m
+[32m+             print(f"Nenhum arquivo TXT ou CSV encontrado no ZIP {os.path.basename(arquivo_zip)}")[m
+              continue[m
+          [m
+[31m-         # Calcular a Base Calculo[m
+[31m-         base_calculo = calcular_base_calculo(df_base)[m
+[31m-         [m
+[31m-         # Calcular as métricas auxiliares[m
+[31m-         disp_mecanica = calcular_disponibilidade_mecanica(df_base)[m
+[31m-         eficiencia_energetica = calcular_eficiencia_energetica(base_calculo)[m
+[31m-         motor_ocioso = calcular_motor_ocioso(base_calculo, df_base)[m
+[31m-         falta_apontamento = calcular_falta_apontamento(base_calculo)[m
+[31m-         uso_gps = calcular_uso_gps(base_calculo)[m
+[31m-         horas_por_frota = calcular_horas_por_frota(df_base)[m
+[31m-         [m
+[31m-         # Criar o arquivo Excel com todas as planilhas[m
+[31m-         criar_excel_com_planilhas([m
+[31m-             df_base, base_calculo, disp_mecanica, eficiencia_energetica,[m
+[31m-             motor_ocioso, falta_apontamento, uso_gps, horas_por_frota, arquivo_saida[m
+[31m-         )[m
+[31m-         [m
+[31m-         print(f"Arquivo {arquivo_saida} gerado com sucesso!")[m
+[32m+         print(f"Extraídos {len(arquivos_extraidos)} arquivos do ZIP.")[m
+[32m+         [m
+[32m+         # Processar cada arquivo extraído[m
+[32m+         for arquivo_extraido in arquivos_extraidos:[m
+[32m+             # Filtrar arquivos que contenham "colhedora" no nome[m
+[32m+             if "colhedora" not in os.path.basename(arquivo_extraido).lower():[m
+[32m+                 processar_arquivo(arquivo_extraido, diretorio_saida)[m
+[32m+         [m
+[32m+         # Limpar pasta temporária se foi criada[m
+[32m+         if pasta_temp:[m
+[32m+             try:[m
+[32m+                 shutil.rmtree(pasta_temp)[m
+[32m+                 print(f"Pasta temporária removida: {pasta_temp}")[m
+[32m+             except Exception as e:[m
+[32m+                 print(f"Erro ao remover pasta temporária {pasta_temp}: {str(e)}")[m
+[32m+ [m
+[32m+ def processar_arquivo(caminho_arquivo, diretorio_saida):[m
+[32m+     """[m
+[32m+     Processa um único arquivo e gera o Excel de saída.[m
+[32m+     [m
+[32m+     Args:[m
+[32m+         caminho_arquivo (str): Caminho do arquivo a ser processado[m
+[32m+         diretorio_saida (str): Diretório onde o arquivo de saída será salvo[m
+[32m+     """[m
+[32m+     # Obter apenas o nome do arquivo (sem caminho e sem extensão)[m
+[32m+     nome_base = os.path.splitext(os.path.basename(caminho_arquivo))[0][m
+[32m+     [m
+[32m+     # Nome de saída igual ao original, mas com extensão .xlsx na pasta output[m
+[32m+     arquivo_saida = os.path.join(diretorio_saida, f"{nome_base}.xlsx")[m
+[32m+     [m
+[32m+     print(f"\nProcessando arquivo: {os.path.basename(caminho_arquivo)}")[m
+[32m+     print(f"Arquivo de saída: {os.path.basename(arquivo_saida)}")[m
+[32m+     [m
+[32m+     # Processar o arquivo base[m
+[32m+     df_base = processar_arquivo_base(caminho_arquivo)[m
+[32m+     if df_base is None:[m
+[32m+         print(f"Erro ao processar {os.path.basename(caminho_arquivo)}. Pulando para o próximo arquivo.")[m
+[32m+         return[m
+[32m+     [m
+[32m+     # Se o DataFrame estiver vazio, gerar apenas a planilha BASE[m
+[32m+     if len(df_base) == 0:[m
+[32m+         writer = pd.ExcelWriter(arquivo_saida, engine='openpyxl')[m
+[32m+         df_base.to_excel(writer, sheet_name='BASE', index=False)[m
+[32m+         writer.close()[m
+[32m+         print(f"Arquivo {arquivo_saida} gerado com apenas a planilha BASE (sem dados).")[m
+[32m+         return[m
+[32m+     [m
+[32m+     # Calcular a Base Calculo[m
+[32m+     base_calculo = calcular_base_calculo(df_base)[m
+[32m+     [m
+[32m+     # Calcular as métricas auxiliares[m
+[32m+     disp_mecanica = calcular_disponibilidade_mecanica(df_base)[m
+[32m+     eficiencia_energetica = calcular_eficiencia_energetica(base_calculo)[m
+[31m -    motor_ocioso = calcular_motor_ocioso(base_calculo)[m
+[32m++    motor_ocioso = calcular_motor_ocioso(base_calculo, df_base)[m
+[32m+     falta_apontamento = calcular_falta_apontamento(base_calculo)[m
+[32m+     uso_gps = calcular_uso_gps(base_calculo)[m
+[32m+     horas_por_frota = calcular_horas_por_frota(df_base)[m
+[32m+     [m
+[32m+     # Criar o arquivo Excel com todas as planilhas[m
+[32m+     criar_excel_com_planilhas([m
+[32m+         df_base, base_calculo, disp_mecanica, eficiencia_energetica,[m
+[32m+         motor_ocioso, falta_apontamento, uso_gps, horas_por_frota, arquivo_saida[m
+[32m+     )[m
+[32m+     [m
+[32m+     print(f"Arquivo {arquivo_saida} gerado com sucesso!")[m
+  [m
+  if __name__ == "__main__":[m
+      print("="*80)[m
+      print("Iniciando processamento de arquivos de transbordos...")[m
+      print(f"Processamento de arquivos CSV: {'ATIVADO' if processCsv else 'DESATIVADO'}")[m
+[31m -    print("Este script processa arquivos de transbordos e gera planilhas Excel com métricas")[m
+[32m +    [m
+[32m +    # Exibir informações sobre operações excluídas do cálculo de motor ocioso[m
+[32m +    operacoes_excluidas = CONFIG_CALCULOS.get("TT", {}).get("motor_ocioso", {}).get("operacoes_excluidas", [])[m
+[32m +    if operacoes_excluidas:[m
+[32m +        print("\nOperações excluídas do cálculo de Motor Ocioso:")[m
+[32m +        for op in operacoes_excluidas:[m
+[32m +            print(f"- {op}")[m
+[32m +    [m
+[32m +    print("\nEste script processa arquivos de transbordos e gera planilhas Excel com métricas")[m
+[32m+     print("Suporta arquivos TXT, CSV e ZIP")[m
+      print("Ignorando arquivos que contenham 'colhedora' no nome")[m
+      print("="*80)[m
+      processar_todos_arquivos()[m

@@ -3,7 +3,10 @@
     "motor_ocioso": {
       "tipo_calculo": "Remover do cálculo",
       "operacoes_excluidas": [
-        "8490 - LAVAGEM"
+        "8490 - LAVAGEM",
+        "MANUTENCAO",
+        "LAVAGEM",
+        "INST CONFIG TECNOL EMBARCADAS"
       ],
       "grupos_operacao_excluidos": [
         "Manutenção"
@@ -20,7 +23,10 @@
       "operacoes_excluidas": [
         "9016 - ENCH SISTEMA FREIO",
         "6340 - BASCULANDO  TRANSBORDAGEM",
-        "9024 - DESATOLAMENTO"
+        "9024 - DESATOLAMENTO",
+        "MANUTENÇÃO",
+        "INST CONFIG TECNOL EMBARCADAS",
+        "DESATOLAMENTO"
       ],
       "grupos_operacao_excluidos": [
         "Manutenção"
@@ -29,6 +35,6 @@
     "operadores_excluidos": [
       "9999 - TROCA DE TURNO"
     ],
-    "equipamentos_excluidos": ["2127"]
+    "equipamentos_excluidos": []
   }
 } 
