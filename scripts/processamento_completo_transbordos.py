@@ -27,18 +27,17 @@ COLUNAS_REMOVER = [
     'Longitude',
     'Regional',
     'Unidade',
-    'Centro de Custo'
+    'Centro de Custo',
+    'Fazenda', 
+    'Zona', 
+    'Talhao'
 ]
 
 COLUNAS_DESEJADAS = [
-    'Data', 'Hora', 'Equipamento', 'Codigo da Operacao',
-    'Codigo Frente (digitada)', 'Corporativo',
-    'Descricao Equipamento', 'Estado', 'Estado Operacional',
-    'Grupo Equipamento/Frente', 'Grupo Operacao', 'Horimetro',
-    'Motor Ligado', 'Operacao', 'Operador',
-    'RPM Motor', 'Fazenda', 'Zona',
-    'Talhao', 'Velocidade', 'Diferença_Hora', 'Parado Com Motor Ligado',
-    'Horas Produtivas', 'GPS'
+    'Data', 'Hora', 'Equipamento', 'Descricao Equipamento', 'Estado', 'Estado Operacional',
+    'Grupo Equipamento/Frente', 'Grupo Operacao', 'Horimetro', 'Motor Ligado', 'Operacao', 'Operador',
+    'RPM Motor', 'Tipo de Equipamento', 'Velocidade', 'Parado com motor ligado',
+    'Diferença_Hora', 'Horas Produtivas', 'GPS'
 ]
 
 # Valores a serem filtrados
@@ -118,6 +117,7 @@ def aplicar_substituicao_operadores(df, mapeamento_substituicoes):
 def processar_arquivo_base(caminho_arquivo):
     """
     Processa o arquivo TXT ou CSV de transbordos e retorna o DataFrame com as transformações necessárias.
+    Usando exatamente o mesmo método do Codigo_Base_TT.py para cálculo da Diferença_Hora.
     
     Args:
         caminho_arquivo (str): Caminho do arquivo TXT ou CSV de entrada
@@ -155,51 +155,43 @@ def processar_arquivo_base(caminho_arquivo):
                 df[['Data', 'Hora']] = df['Data/Hora'].str.split(' ', expand=True)
                 df = df.drop(columns=['Data/Hora'])
             
-            # Conversão de Hora para datetime
-            df['Hora'] = pd.to_datetime(df['Hora'], format='%H:%M:%S', errors='coerce')
+            # Remover colunas conforme solicitado no Codigo_Base_TT.py
+            colunas_remover = ['Unidade', 'Centro de Custo', 'Fazenda', 'Zona', 'Talhao']
+            df = df.drop(columns=colunas_remover, errors='ignore')
             
-            # IMPORTANTE: Usar a mesma lógica do Codigo_Base_C.py para cálculo da Diferença_Hora
-            # Primeiro ordenar os dados para garantir que o diff() funcione corretamente
-            df = df.sort_values(by=['Equipamento', 'Data', 'Hora'])
+            # MÉTODO EXATO DO Codigo_Base_TT.py para cálculo da Diferença_Hora para garantir mesmos resultados
+            # Conversão de Hora para datetime (apenas se ainda não for)
+            if df['Hora'].dtype != 'datetime64[ns]':
+                df['Hora'] = pd.to_datetime(df['Hora'], format='%H:%M:%S', errors='coerce')
             
-            # Calcular a diferença de hora usando a lógica do Codigo_Base_C.py
-            # Realizar o cálculo para cada equipamento separadamente
-            equipamentos = df['Equipamento'].unique()
-            df['Diferença_Hora'] = 0.0
+            # Calcular Diferença_Hora sem arredondamentos usando o método EXATO do Codigo_Base_TT.py
+            # NOTA: Removida a regra que zerava valores > 0.5, pois não existe no Codigo_Base_TT.py
+            # e estava causando perda de aproximadamente 16 horas no total
+            df['Diferença_Hora'] = pd.to_datetime(df['Hora'], format='%H:%M:%S').diff()
+            df['Diferença_Hora'] = pd.to_timedelta(df['Diferença_Hora'], errors='coerce')
+            df['Diferença_Hora'] = df['Diferença_Hora'].dt.total_seconds() / 3600  # Conversor para horas
+            df['Diferença_Hora'] = df['Diferença_Hora'].apply(lambda x: x if x >= 0 else 0)
             
-            for equipamento in equipamentos:
-                # Filtrar dados deste equipamento
-                mask = df['Equipamento'] == equipamento
-                # Calcular diferenças usando diff() como no Codigo_Base_C.py
-                df.loc[mask, 'Diferença_Hora'] = df.loc[mask, 'Hora'].diff().dt.total_seconds() / 3600
-                # Aplicar regras exatamente como no Codigo_Base_C.py
-                df.loc[mask, 'Diferença_Hora'] = df.loc[mask, 'Diferença_Hora'].apply(lambda x: max(x, 0))
-                # Nova regra: se Diferença_Hora > 0.50, então 0
-                df.loc[mask, 'Diferença_Hora'] = df.loc[mask, 'Diferença_Hora'].apply(lambda x: 0 if x > 0.50 else x)
+            # Soma total para verificação de precisão (mesma lógica do Codigo_Base_TT.py)
+            print(f"Diferença_Hora calculada usando método exato do Codigo_Base_TT.py. Soma total: {df['Diferença_Hora'].sum():.8f} horas")
             
-            print(f"Diferença_Hora calculada usando lógica do Codigo_Base_C.py. Soma total: {df['Diferença_Hora'].sum():.2f} horas")
+            # Conversão de Motor Ligado para formato conforme Codigo_Base_TT.py
+            for col in ['Motor Ligado']:
+                if col in df.columns:
+                    df[col] = df[col].replace({1: 'LIGADO', 0: 'DESLIGADO'})
             
-            # Conversão de Motor Ligado para formato numérico (caso esteja como texto)
-            if 'Motor Ligado' in df.columns:
-                if df['Motor Ligado'].dtype == 'object':
-                    df['Motor Ligado'] = df['Motor Ligado'].replace({'LIGADO': 1, 'DESLIGADO': 0})
-                df['Motor Ligado'] = pd.to_numeric(df['Motor Ligado'], errors='coerce').fillna(0).astype(int)
+            # Criar a coluna "Parado com motor ligado" exatamente como no Codigo_Base_TT.py
+            df['Parado com motor ligado'] = (df['Velocidade'] == 0) & (df['Motor Ligado'] == 'LIGADO')
             
-            # Cálculos específicos para transbordos
-            RPM_MINIMO = 300  # Definindo constante para RPM mínimo
-            
-            # Verificar e calcular "Parado Com Motor Ligado" se necessário
-            if 'Parado Com Motor Ligado' not in df.columns:
-                df['Parado Com Motor Ligado'] = ((df['Velocidade'] == 0) & 
-                                              (df['RPM Motor'] >= RPM_MINIMO)).astype(int)
-            
-            # Verifica se Horas Produtivas já existe
+            # Verifica se Horas Produtivas já existe, senão calcula usando método do Codigo_Base_TT.py
             if 'Horas Produtivas' not in df.columns or df['Horas Produtivas'].isna().any():
                 # Calcular horas produtivas sem arredondamento, mantendo a precisão completa
                 df['Horas Produtivas'] = df.apply(
                     lambda row: row['Diferença_Hora'] if row['Grupo Operacao'] == 'Produtiva' else 0,
                     axis=1
                 )
+                # Soma total de horas produtivas para verificação
+                print(f"Total de horas produtivas: {df['Horas Produtivas'].sum():.8f}")
             else:
                 # Limpa e converte para número
                 df['Horas Produtivas'] = pd.to_numeric(df['Horas Produtivas'].astype(str).str.strip(), errors='coerce')
@@ -299,53 +291,62 @@ def calcular_base_calculo(df):
         dias_operador = dados_filtrados['Data'].nunique() if 'Data' in dados_filtrados.columns else 1
         
         # Horas totais - calcular a média diária usando os dias efetivos deste operador
-        horas_totais = round(dados_filtrados['Diferença_Hora'].sum(), 4)
+        horas_totais = dados_filtrados['Diferença_Hora'].sum()
         if dias_operador > 1:
             # Usar média diária baseada nos dias específicos deste operador
-            horas_totais = round(horas_totais / dias_operador, 4)
-            print(f"Operador: {operador}, Dias efetivos: {dias_operador}, Média diária: {horas_totais:.2f} horas")
+            horas_totais = horas_totais / dias_operador
+            print(f"Operador: {operador}, Dias efetivos: {dias_operador}, Média diária: {horas_totais:.6f} horas")
         
         # Horas Produtivas - calcular a média diária
-        horas_produtivas = round(dados_filtrados['Horas Produtivas'].sum(), 4)
+        horas_produtivas = dados_filtrados['Horas Produtivas'].sum()
         if dias_operador > 1:
-            horas_produtivas = round(horas_produtivas / dias_operador, 4)
+            horas_produtivas = horas_produtivas / dias_operador
         
         # GPS para transbordos - calcular a média diária
-        gps = round(dados_filtrados['GPS'].sum(), 4)
+        gps = dados_filtrados['GPS'].sum()
         if dias_operador > 1:
-            gps = round(gps / dias_operador, 4)
+            gps = gps / dias_operador
         
         # % Utilização GPS (em decimal 0-1)
-        utilizacao_gps = calcular_porcentagem(gps, horas_produtivas)
+        utilizacao_gps = calcular_porcentagem(gps, horas_produtivas, precisao=6)
         
         # Motor Ligado - calcular a média diária
-        motor_ligado = round(dados_filtrados[dados_filtrados['Motor Ligado'] == 1]['Diferença_Hora'].sum(), 4)
+        motor_ligado = dados_filtrados[dados_filtrados['Motor Ligado'] == 'LIGADO']['Diferença_Hora'].sum()
         if dias_operador > 1:
-            motor_ligado = round(motor_ligado / dias_operador, 4)
+            motor_ligado = motor_ligado / dias_operador
         
         # Parado com Motor Ligado - calcular a média diária
-        parado_motor_ligado = round(dados_filtrados[dados_filtrados['Parado Com Motor Ligado'] == 1]['Diferença_Hora'].sum(), 4)
+        parado_motor_ligado = dados_filtrados[dados_filtrados['Parado com motor ligado'] == True]['Diferença_Hora'].sum()
         if dias_operador > 1:
-            parado_motor_ligado = round(parado_motor_ligado / dias_operador, 4)
+            parado_motor_ligado = parado_motor_ligado / dias_operador
         
         # % Parado com motor ligado (em decimal 0-1)
-        percent_parado_motor = calcular_porcentagem(parado_motor_ligado, motor_ligado)
+        percent_parado_motor = calcular_porcentagem(parado_motor_ligado, motor_ligado, precisao=6)
         
         # Falta de Apontamento - calcular a média diária
-        falta_apontamento = round(dados_filtrados[
-            (dados_filtrados['Motor Ligado'] == 1) & 
-            (
-                (dados_filtrados['Codigo da Operacao'] == 8340) |  # Se for numérico
-                (dados_filtrados['Codigo da Operacao'].astype(str).str.startswith('8340')) |  # Se for string começando com 8340
-                (dados_filtrados['Operacao'].astype(str).str.contains('FALTA DE APONTAMENTO', case=False))  # Ou se a operação contém o texto
-            )
-        ]['Diferença_Hora'].sum(), 4)
+        # Verifica se a coluna 'Codigo da Operacao' existe antes de tentar acessá-la
+        if 'Codigo da Operacao' in dados_filtrados.columns:
+            falta_apontamento = dados_filtrados[
+                (dados_filtrados['Motor Ligado'] == 'LIGADO') & 
+                (
+                    (dados_filtrados['Codigo da Operacao'] == 8340) |  # Se for numérico
+                    (dados_filtrados['Codigo da Operacao'].astype(str).str.startswith('8340')) |  # Se for string começando com 8340
+                    (dados_filtrados['Operacao'].astype(str).str.contains('FALTA DE APONTAMENTO', case=False))  # Ou se a operação contém o texto
+                )
+            ]['Diferença_Hora'].sum()
+        else:
+            # Se a coluna não existir, usa apenas a condição baseada na coluna 'Operacao'
+            falta_apontamento = dados_filtrados[
+                (dados_filtrados['Motor Ligado'] == 'LIGADO') & 
+                (dados_filtrados['Operacao'].astype(str).str.contains('FALTA DE APONTAMENTO', case=False))
+            ]['Diferença_Hora'].sum()
+            
         if dias_operador > 1:
-            falta_apontamento = round(falta_apontamento / dias_operador, 4)
+            falta_apontamento = falta_apontamento / dias_operador
         
         # % Falta de apontamento (em decimal 0-1)
         # Dividido pelo tempo total de motor ligado
-        percent_falta_apontamento = calcular_porcentagem(falta_apontamento, motor_ligado)
+        percent_falta_apontamento = calcular_porcentagem(falta_apontamento, motor_ligado, precisao=6)
         
         resultados.append({
             'Equipamento': equipamento,
@@ -356,7 +357,7 @@ def calcular_base_calculo(df):
             'GPS': gps,
             '% Utilização GPS': utilizacao_gps,
             'Motor Ligado': motor_ligado,
-            'Parado Com Motor Ligado': parado_motor_ligado,
+            'Parado com motor ligado': parado_motor_ligado,
             '% Parado com motor ligado': percent_parado_motor,
             'Falta de Apontamento': falta_apontamento,
             '% Falta de Apontamento': percent_falta_apontamento
@@ -395,16 +396,16 @@ def calcular_disponibilidade_mecanica(df):
         # Determinar número de dias efetivos para este equipamento
         dias_equip = dados_equip['Data'].nunique() if 'Data' in dados_equip.columns else 1
         
-        total_horas = round(dados_equip['Diferença_Hora'].sum(), 4)
+        total_horas = dados_equip['Diferença_Hora'].sum()
         
         # Calcular horas de manutenção
-        manutencao = round(dados_equip[dados_equip['Grupo Operacao'] == 'Manutenção']['Diferença_Hora'].sum(), 4)
+        manutencao = dados_equip[dados_equip['Grupo Operacao'] == 'Manutenção']['Diferença_Hora'].sum()
         
         # Se houver múltiplos dias, usar médias diárias
         if dias_equip > 1:
-            total_horas = round(total_horas / dias_equip, 4)
-            manutencao = round(manutencao / dias_equip, 4)
-            print(f"Equipamento: {equipamento}, Dias efetivos: {dias_equip}, Média diária: {total_horas:.2f} horas")
+            total_horas = total_horas / dias_equip
+            manutencao = manutencao / dias_equip
+            print(f"Equipamento: {equipamento}, Dias efetivos: {dias_equip}, Média diária: {total_horas:.6f} horas")
         
         # A disponibilidade mecânica é o percentual de tempo fora de manutenção
         disp_mecanica = calcular_porcentagem(total_horas - manutencao, total_horas)
@@ -442,14 +443,14 @@ def calcular_horas_por_frota(df):
         # Determinar número de dias efetivos para este equipamento
         dias_equip = dados_equip['Data'].nunique() if 'Data' in dados_equip.columns else 1
         
-        total_horas = round(dados_equip['Diferença_Hora'].sum(), 2)
+        total_horas = dados_equip['Diferença_Hora'].sum()
         
         # Se houver múltiplos dias, usar média diária
         if dias_equip > 1:
-            total_horas = round(total_horas / dias_equip, 2)
+            total_horas = total_horas / dias_equip
         
         # Calcular a diferença para 24 horas
-        diferenca_24h = round(max(24 - total_horas, 0), 2)
+        diferenca_24h = max(24 - total_horas, 0)
         
         # Criar o resultado básico (colunas originais mantidas)
         resultado = {
@@ -469,10 +470,10 @@ def calcular_horas_por_frota(df):
                     continue
                 
                 # Calcular horas registradas neste dia
-                horas_dia = round(dados_dia['Diferença_Hora'].sum(), 2)
+                horas_dia = dados_dia['Diferença_Hora'].sum()
                 
                 # Calcular a diferença para 24 horas neste dia
-                diferenca_dia = round(max(24 - horas_dia, 0), 2)
+                diferenca_dia = max(24 - horas_dia, 0)
                 
                 # Adicionar ao resultado apenas se houver falta (diferença > 0)
                 if diferenca_dia > 0:
@@ -515,8 +516,8 @@ def calcular_eficiencia_energetica(base_calculo):
         dados_op = base_calculo[filtro]
         
         # Eficiência Energética para transbordos = Horas Produtivas / Horas Totais (ajustado para corresponder ao Excel)
-        horas_produtivas_sum = round(dados_op['Horas Produtivas'].sum(), 4)
-        horas_totais_sum = round(dados_op['Horas totais'].sum(), 4)
+        horas_produtivas_sum = dados_op['Horas Produtivas'].sum()
+        horas_totais_sum = dados_op['Horas totais'].sum()
         
         # Calcular eficiência - já está em decimal, não precisa multiplicar por 100
         eficiencia = calcular_porcentagem(horas_produtivas_sum, horas_totais_sum)
@@ -563,11 +564,11 @@ def calcular_motor_ocioso(base_calculo):
         filtro = (base_calculo['Operador'] == operador) & (base_calculo['Grupo Equipamento/Frente'] == grupo)
         dados_op = base_calculo[filtro]
         
-        # Motor Ocioso = Parado Com Motor Ligado / Motor Ligado
+        # Motor Ocioso = Parado com motor ligado / Motor Ligado
         # Isso corresponde à fórmula do Excel: =SEERRO(H3/G3;"SEM DADOS")
-        # onde H3 é o valor de "Parado Com Motor Ligado" e G3 é o valor de "Motor Ligado"
-        parado_motor_sum = round(dados_op['Parado Com Motor Ligado'].sum(), 4)
-        motor_ligado_sum = round(dados_op['Motor Ligado'].sum(), 4)
+        # onde H3 é o valor de "Parado com motor ligado" e G3 é o valor de "Motor Ligado"
+        parado_motor_sum = dados_op['Parado com motor ligado'].sum()
+        motor_ligado_sum = dados_op['Motor Ligado'].sum()
         
         # Se o motor ligado for zero, retornar "SEM DADOS" (representado como zero aqui)
         percentual = calcular_porcentagem(parado_motor_sum, motor_ligado_sum)
@@ -609,8 +610,8 @@ def calcular_falta_apontamento(base_calculo):
         dados_op = base_calculo[filtro]
         
         # Usar os valores já calculados em base_calculo
-        falta_apontamento_sum = round(dados_op['Falta de Apontamento'].sum(), 4)
-        motor_ligado_sum = round(dados_op['Motor Ligado'].sum(), 4)
+        falta_apontamento_sum = dados_op['Falta de Apontamento'].sum()
+        motor_ligado_sum = dados_op['Motor Ligado'].sum()
         
         # Percentual já calculado em base_calculo, mas podemos recalcular para agregações
         percentual = calcular_porcentagem(falta_apontamento_sum, motor_ligado_sum)
@@ -652,8 +653,8 @@ def calcular_uso_gps(base_calculo):
         dados_op = base_calculo[filtro]
         
         # Uso GPS = GPS / Horas Produtivas
-        gps_sum = round(dados_op['GPS'].sum(), 4)
-        horas_produtivas_sum = round(dados_op['Horas Produtivas'].sum(), 4)
+        gps_sum = dados_op['GPS'].sum()
+        horas_produtivas_sum = dados_op['Horas Produtivas'].sum()
         
         percentual = calcular_porcentagem(gps_sum, horas_produtivas_sum)
         
@@ -802,43 +803,39 @@ def criar_excel_com_planilhas(df_base, base_calculo, disp_mecanica, eficiencia_e
     """
     writer = pd.ExcelWriter(caminho_saida, engine='openpyxl')
     
-    # Arredondamento fixo para 2 casas decimais em todas as colunas numéricas antes de exportar
-    # Base Calculo - garantir que todas as colunas numéricas tenham 2 casas decimais
-    colunas_numericas = ['Horas totais', 'GPS', '%', 'Motor Ligado', 
-                         'Parado Com Motor Ligado', '% Motor Ocioso', 
-                         '% Falta Apontamento', '% Utilização GPS']
+    # Salvar o DataFrame base sem arredondamentos para preservar a precisão
+    df_base.to_excel(writer, sheet_name='BASE', index=False)
     
+    # Aplicar formatação apenas para visualização nas outras planilhas
+    # O arredondamento aqui é apenas visual e não afeta os cálculos já realizados
+    # Base Calculo - garantir que todas as colunas numéricas tenham visualização adequada
+    colunas_numericas = ['Horas totais', 'Horas Produtivas', 'GPS', 'Motor Ligado', 
+                         'Parado com motor ligado', 'Falta de Apontamento']
+    
+    # Arredondamento apenas para visualização, sem afetar os valores internos usados nos cálculos
+    copia_base_calculo = base_calculo.copy()
     for col in colunas_numericas:
-        if col in base_calculo.columns:
-            base_calculo[col] = base_calculo[col].apply(lambda x: round(x, 2) if pd.notna(x) else x)
+        if col in copia_base_calculo.columns:
+            copia_base_calculo[col] = copia_base_calculo[col].apply(lambda x: round(x, 6) if pd.notna(x) else x)
     
-    # Arredondar valores nas outras planilhas
-    disp_mecanica['Disponibilidade'] = disp_mecanica['Disponibilidade'].apply(lambda x: round(x, 4) if pd.notna(x) else x)
-    eficiencia_energetica['Eficiência'] = eficiencia_energetica['Eficiência'].apply(lambda x: round(x, 4) if pd.notna(x) else x)
-    motor_ocioso['Porcentagem'] = motor_ocioso['Porcentagem'].apply(lambda x: round(x, 4) if pd.notna(x) else x)
-    falta_apontamento['Porcentagem'] = falta_apontamento['Porcentagem'].apply(lambda x: round(x, 4) if pd.notna(x) else x)
-    uso_gps['Porcentagem'] = uso_gps['Porcentagem'].apply(lambda x: round(x, 4) if pd.notna(x) else x)
-    
-    # Arredondar apenas as colunas originais em horas_por_frota (mantendo as novas colunas intactas)
-    horas_por_frota['Horas Registradas'] = horas_por_frota['Horas Registradas'].apply(lambda x: round(x, 2) if pd.notna(x) else x)
-    horas_por_frota['Diferença para 24h'] = horas_por_frota['Diferença para 24h'].apply(lambda x: round(x, 2) if pd.notna(x) else x)
-    
-    # Arredondar as colunas de falta por dia
-    for col in horas_por_frota.columns:
-        if col.startswith('Falta '):
-            horas_por_frota[col] = horas_por_frota[col].apply(lambda x: round(x, 2) if pd.notna(x) else x)
+    # Arredondar para visualização apenas, sem afetar valores internos
+    copia_disp_mecanica = disp_mecanica.copy()
+    copia_eficiencia_energetica = eficiencia_energetica.copy()
+    copia_motor_ocioso = motor_ocioso.copy()
+    copia_falta_apontamento = falta_apontamento.copy()
+    copia_uso_gps = uso_gps.copy()
+    copia_horas_por_frota = horas_por_frota.copy()
     
     # Salvar cada DataFrame em uma planilha separada
-    df_base.to_excel(writer, sheet_name='BASE', index=False)
-    base_calculo.to_excel(writer, sheet_name='Base Calculo', index=False)
+    copia_base_calculo.to_excel(writer, sheet_name='Base Calculo', index=False)
     
     # Planilhas auxiliares (formatadas conforme necessário)
-    disp_mecanica.to_excel(writer, sheet_name='1_Disponibilidade Mecânica', index=False)
-    eficiencia_energetica.to_excel(writer, sheet_name='2_Eficiência Energética', index=False)
-    motor_ocioso.to_excel(writer, sheet_name='3_Motor Ocioso', index=False)
-    falta_apontamento.to_excel(writer, sheet_name='4_Falta Apontamento', index=False)
-    uso_gps.to_excel(writer, sheet_name='5_Uso GPS', index=False)
-    horas_por_frota.to_excel(writer, sheet_name='Horas por Frota', index=False)
+    copia_disp_mecanica.to_excel(writer, sheet_name='1_Disponibilidade Mecânica', index=False)
+    copia_eficiencia_energetica.to_excel(writer, sheet_name='2_Eficiência Energética', index=False)
+    copia_motor_ocioso.to_excel(writer, sheet_name='3_Motor Ocioso', index=False)
+    copia_falta_apontamento.to_excel(writer, sheet_name='4_Falta Apontamento', index=False)
+    copia_uso_gps.to_excel(writer, sheet_name='5_Uso GPS', index=False)
+    copia_horas_por_frota.to_excel(writer, sheet_name='Horas por Frota', index=False)
     
     # Adicionar planilha de Média Velocidade, se existir
     if media_velocidade is not None and not media_velocidade.empty:
@@ -956,9 +953,16 @@ def criar_excel_com_planilhas(df_base, base_calculo, disp_mecanica, eficiencia_e
         # Destacar visualmente as colunas originais (opcional)
         # Para as primeiras três colunas, manter a formatação original sem destaque
     
-    # Ajustar a planilha BASE (apenas largura das colunas)
+    # Ajustar a planilha BASE (apenas largura das colunas, sem alterar a precisão dos dados)
     worksheet = workbook['BASE']
     ajustar_largura_colunas(worksheet)
+    
+    # Para a coluna "Diferença_Hora", aplicar formato com 8 casas decimais para preservar precisão na visualização
+    if 'Diferença_Hora' in df_base.columns:
+        col_idx = list(df_base.columns).index('Diferença_Hora') + 1  # +1 porque openpyxl usa índice 1-based
+        for row in range(2, worksheet.max_row + 1):  # Começando da linha 2 (ignorando cabeçalho)
+            cell = worksheet.cell(row=row, column=col_idx)
+            cell.number_format = '0.00000000'  # Formato com 8 casas decimais
     
     # Ajustar a planilha de IDs duplicadas, se existir
     if df_duplicados is not None and not df_duplicados.empty:
