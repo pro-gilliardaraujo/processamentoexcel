@@ -149,12 +149,22 @@ def processar_arquivo_base(caminho_arquivo):
                 df[['Data', 'Hora']] = df['Data/Hora'].str.split(' ', expand=True)
                 df = df.drop(columns=['Data/Hora'])
             
-            # Conversão de Hora para datetime
-            df['Hora'] = pd.to_datetime(df['Hora'], format='%H:%M:%S', errors='coerce')
+            # Manter a coluna Hora como string no formato HH:MM:SS
+            # Não converter para datetime para evitar a adição da data
+            if 'Hora' in df.columns:
+                # Garantir que a coluna Hora esteja no formato correto
+                df['Hora'] = df['Hora'].astype(str).str.strip()
+                # Remover qualquer data que possa ter sido adicionada
+                df['Hora'] = df['Hora'].apply(lambda x: x.split(' ')[-1] if ' ' in x else x)
+                # Garantir que o formato seja HH:MM:SS
+                df['Hora'] = df['Hora'].apply(lambda x: x if len(x) >= 8 else f"0{x}" if len(x) == 7 else x)
             
             # IMPORTANTE: Calcular a Diferença_Hora mantendo a ordem original dos registros
             # Não reordenar os dados para preservar a sequência original
-            df['Diferença_Hora'] = df['Hora'].diff().dt.total_seconds() / 3600
+            # Converter Hora para datetime apenas para o cálculo da diferença
+            df_temp = df.copy()
+            df_temp['Hora_Calc'] = pd.to_datetime(df_temp['Hora'], format='%H:%M:%S', errors='coerce')
+            df['Diferença_Hora'] = df_temp['Hora_Calc'].diff().dt.total_seconds() / 3600
             # Aplicar regras para a Diferença_Hora
             df['Diferença_Hora'] = df['Diferença_Hora'].apply(lambda x: max(x, 0))
             # Nova regra: se Diferença_Hora > 0.50, então 0
