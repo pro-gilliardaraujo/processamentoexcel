@@ -542,13 +542,6 @@ def calcular_motor_ocioso(base_calculo, df_base=None):
     Returns:
         DataFrame: Percentual de motor ocioso por operador, tempo operação e tempo ocioso
     """
-    # Função para calcular valores com alta precisão e depois formatar
-    def calcular_porcentagem(numerador, denominador, precisao=4):
-        """Calcula porcentagem como decimal (0-1) evitando divisão por zero."""
-        if denominador > 0:
-            return round((numerador / denominador), precisao)
-        return 0.0
-    
     # Carregar configurações para exclusões
     config = carregar_config_calculos()
     tipo_equipamento = "CD"  # Colhedoras
@@ -576,27 +569,17 @@ def calcular_motor_ocioso(base_calculo, df_base=None):
         dados_op = base_calculo[filtro]
         
         # Para motor ocioso, usamos valores ACUMULADOS TOTAIS, não médias diárias
-        # Recuperar valores brutos da base_calculo
         if 'Data' in dados_op.columns:
             dias_operador = dados_op['Data'].nunique()
             print(f"Motor ocioso para Operador: {operador} - Total de {dias_operador} dias")
             
-            # Calcular valores acumulados
-            # Aqui vamos buscar os valores originais multiplicando pelos dias (desfazendo a média diária)
-            motor_ligado_sum = 0
-            parado_motor_sum = 0
-            
-            for _, row_op in dados_op.iterrows():
-                # Multiplicar os valores pelo número de dias deste operador para obter valores totais
-                motor_ligado_total = round(row_op['Motor Ligado'] * dias_operador, 4)
-                parado_motor_total = round(row_op['Parado Com Motor Ligado'] * dias_operador, 4)
-                
-                motor_ligado_sum += motor_ligado_total
-                parado_motor_sum += parado_motor_total
+            # Calcular valores totais multiplicando as médias diárias pelo número de dias
+            motor_ligado_sum = dados_op['Motor Ligado'].sum() * dias_operador
+            parado_motor_sum = dados_op['Parado Com Motor Ligado'].sum() * dias_operador
         else:
             # Se não tiver coluna Data, é um único dia, usar valores como estão
-            motor_ligado_sum = round(dados_op['Motor Ligado'].sum(), 4)
-            parado_motor_sum = round(dados_op['Parado Com Motor Ligado'].sum(), 4)
+            motor_ligado_sum = dados_op['Motor Ligado'].sum()
+            parado_motor_sum = dados_op['Parado Com Motor Ligado'].sum()
         
         # Se temos o df_base e há operações a excluir, ajustar os tempos
         if df_base is not None and operacoes_excluidas and tipo_calculo == "Remover do cálculo":
@@ -605,12 +588,16 @@ def calcular_motor_ocioso(base_calculo, df_base=None):
             dados_base = df_base[filtro_base]
             
             # Calcular tempo em operações excluídas (já é valor acumulado total)
-            tempo_op_excluidas = round(dados_base[dados_base['Operacao'].isin(operacoes_excluidas)]['Diferença_Hora'].sum(), 4)
+            tempo_op_excluidas = dados_base[dados_base['Operacao'].isin(operacoes_excluidas)]['Diferença_Hora'].sum()
             
             # Ajustar o tempo de motor ligado (remover o tempo em operações excluídas)
             motor_ligado_sum = max(0, motor_ligado_sum - tempo_op_excluidas)
         
-        percentual = calcular_porcentagem(parado_motor_sum, motor_ligado_sum)
+        # Calcular a porcentagem (Tempo Ocioso / Tempo Ligado)
+        if motor_ligado_sum > 0:
+            percentual = parado_motor_sum / motor_ligado_sum
+        else:
+            percentual = 0.0
         
         resultados.append({
             'Operador': operador,
@@ -810,7 +797,7 @@ def identificar_operadores_duplicados(df):
 
 def criar_excel_com_planilhas(df_base, base_calculo, disp_mecanica, eficiencia_energetica, 
                              hora_elevador, motor_ocioso, uso_gps, horas_por_frota, caminho_saida,
-                             df_duplicados=None, media_velocidade=None):
+                             df_duplicados=None, media_velocidade=None, df_substituicoes=None):
     """
     Cria um arquivo Excel com todas as planilhas auxiliares.
     
@@ -826,7 +813,33 @@ def criar_excel_com_planilhas(df_base, base_calculo, disp_mecanica, eficiencia_e
         caminho_saida (str): Caminho do arquivo Excel de saída
         df_duplicados (DataFrame, optional): Tabela de IDs duplicadas
         media_velocidade (DataFrame, optional): Média de velocidade por operador
+        df_substituicoes (DataFrame, optional): Tabela de IDs substituídas
     """
+    # Definir função de ajuste de largura de colunas
+    def ajustar_largura_colunas(worksheet):
+        """Ajusta a largura das colunas da planilha"""
+        for col in worksheet.columns:
+            # Definir uma largura mínima para todas as colunas
+            max_length = 10
+            column = col[0].column_letter  # Obter a letra da coluna
+            
+            # Verificar largura baseada no conteúdo do cabeçalho
+            header_text = str(col[0].value)
+            if header_text:
+                max_length = max(max_length, len(header_text) + 2)  # +2 para dar espaço extra
+            
+            # Ajustar a largura baseada no conteúdo das células (amostragem)
+            for cell in col[1:min(20, len(col))]:  # Limitar a verificação a 20 linhas para performance
+                if cell.value:
+                    cell_text = str(cell.value)
+                    max_length = max(max_length, len(cell_text) + 2)
+            
+            # Limitar a largura máxima para evitar colunas excessivamente largas
+            max_length = min(max_length, 40)
+            
+            # Definir a largura da coluna
+            worksheet.column_dimensions[column].width = max_length
+    
     writer = pd.ExcelWriter(caminho_saida, engine='openpyxl')
     
     # Arredondamento fixo para 2 casas decimais em todas as colunas numéricas antes de exportar
@@ -875,35 +888,18 @@ def criar_excel_com_planilhas(df_base, base_calculo, disp_mecanica, eficiencia_e
     
     # Adicionar planilha de IDs duplicadas, se existir
     if df_duplicados is not None and not df_duplicados.empty:
-        df_duplicados.to_excel(writer, sheet_name='IDs Duplicadas', index=False)
+        df_duplicados.to_excel(writer, sheet_name='IDs Encontradas', index=False)
+        worksheet = writer.book['IDs Encontradas']
+        ajustar_largura_colunas(worksheet)
+    
+    # Adicionar planilha de IDs substituídas, se existir
+    if df_substituicoes is not None and not df_substituicoes.empty:
+        df_substituicoes.to_excel(writer, sheet_name='IDs Substituídas', index=False)
+        worksheet = writer.book['IDs Substituídas']
+        ajustar_largura_colunas(worksheet)
     
     # Aplicar formatação nas planilhas
     workbook = writer.book
-    
-    # Definir larguras de colunas padrão
-    def ajustar_largura_colunas(worksheet):
-        """Ajusta a largura das colunas da planilha"""
-        for col in worksheet.columns:
-            # Definir uma largura mínima para todas as colunas
-            max_length = 10
-            column = col[0].column_letter  # Obter a letra da coluna
-            
-            # Verificar largura baseada no conteúdo do cabeçalho
-            header_text = str(col[0].value)
-            if header_text:
-                max_length = max(max_length, len(header_text) + 2)  # +2 para dar espaço extra
-            
-            # Ajustar a largura baseada no conteúdo das células (amostragem)
-            for cell in col[1:min(20, len(col))]:  # Limitar a verificação a 20 linhas para performance
-                if cell.value:
-                    cell_text = str(cell.value)
-                    max_length = max(max_length, len(cell_text) + 2)
-            
-            # Limitar a largura máxima para evitar colunas excessivamente largas
-            max_length = min(max_length, 40)
-            
-            # Definir a largura da coluna
-            worksheet.column_dimensions[column].width = max_length
     
     # Formatar planilha de Disponibilidade Mecânica
     worksheet = workbook['1_Disponibilidade Mecânica']
@@ -985,18 +981,10 @@ def criar_excel_com_planilhas(df_base, base_calculo, disp_mecanica, eficiencia_e
         for col in range(2, worksheet.max_column + 1):
             cell = worksheet.cell(row=row, column=col)
             cell.number_format = '0.00'  # Formato decimal com 2 casas
-        
-        # Destacar visualmente as colunas originais (opcional)
-        # Para as primeiras três colunas, manter a formatação original sem destaque
     
     # Ajustar a planilha BASE (apenas largura das colunas)
     worksheet = workbook['BASE']
     ajustar_largura_colunas(worksheet)
-    
-    # Ajustar a planilha de IDs duplicadas, se existir
-    if df_duplicados is not None and not df_duplicados.empty:
-        worksheet = workbook['IDs Duplicadas']
-        ajustar_largura_colunas(worksheet)
     
     writer.close()
     print(f"Arquivo Excel salvo com sucesso em {caminho_saida}")
@@ -1200,13 +1188,16 @@ def aplicar_substituicao_operadores(df, mapeamento_substituicoes):
         mapeamento_substituicoes (dict): Dicionário com mapeamento {operador_origem: operador_destino}
     
     Returns:
-        DataFrame: DataFrame com as substituições aplicadas
+        tuple: (DataFrame com substituições aplicadas, DataFrame com registro das substituições)
     """
     if not mapeamento_substituicoes or 'Operador' not in df.columns:
-        return df
+        return df, pd.DataFrame(columns=['ID Original', 'Nome Original', 'ID Nova', 'Nome Novo', 'Registros Afetados'])
     
     # Criar uma cópia para não alterar o DataFrame original
     df_modificado = df.copy()
+    
+    # Lista para armazenar as substituições realizadas
+    substituicoes_realizadas = []
     
     # Contar operadores antes da substituição
     contagem_antes = df_modificado['Operador'].value_counts()
@@ -1219,10 +1210,28 @@ def aplicar_substituicao_operadores(df, mapeamento_substituicoes):
     
     # Verificar quais operadores foram substituídos
     for operador_origem, operador_destino in mapeamento_substituicoes.items():
-        if operador_origem in contagem_antes and operador_origem not in contagem_depois:
-            print(f"Operador '{operador_origem}' substituído por '{operador_destino}'")
+        if operador_origem in contagem_antes:
+            registros_afetados = contagem_antes.get(operador_origem, 0)
+            if registros_afetados > 0:
+                # Extrair IDs e nomes
+                id_original = operador_origem.split(' - ')[0] if ' - ' in operador_origem else operador_origem
+                nome_original = operador_origem.split(' - ')[1] if ' - ' in operador_origem else ''
+                id_nova = operador_destino.split(' - ')[0] if ' - ' in operador_destino else operador_destino
+                nome_novo = operador_destino.split(' - ')[1] if ' - ' in operador_destino else ''
+                
+                substituicoes_realizadas.append({
+                    'ID Original': id_original,
+                    'Nome Original': nome_original,
+                    'ID Nova': id_nova,
+                    'Nome Novo': nome_novo,
+                    'Registros Afetados': registros_afetados
+                })
+                print(f"Operador '{operador_origem}' substituído por '{operador_destino}' em {registros_afetados} registros")
     
-    return df_modificado
+    # Criar DataFrame com as substituições realizadas
+    df_substituicoes = pd.DataFrame(substituicoes_realizadas)
+    
+    return df_modificado, df_substituicoes
 
 def processar_arquivo(caminho_arquivo, diretorio_saida):
     """
@@ -1257,7 +1266,7 @@ def processar_arquivo(caminho_arquivo, diretorio_saida):
     substituicoes_combinadas = {**substituicoes, **mapeamento_duplicados}
     
     if substituicoes_combinadas:
-        df_base = aplicar_substituicao_operadores(df_base, substituicoes_combinadas)
+        df_base, df_substituicoes = aplicar_substituicao_operadores(df_base, substituicoes_combinadas)
     
     # Se o DataFrame estiver vazio, gerar apenas a planilha BASE
     if len(df_base) == 0:
@@ -1297,7 +1306,8 @@ def processar_arquivo(caminho_arquivo, diretorio_saida):
         df_base, base_calculo, disp_mecanica, eficiencia_energetica,
         hora_elevador, motor_ocioso, uso_gps, horas_por_frota, arquivo_saida,
         df_duplicados,  # Adicionar a tabela de IDs duplicadas
-        media_velocidade  # Adicionar a tabela de média de velocidade
+        media_velocidade,  # Adicionar a tabela de média de velocidade
+        df_substituicoes  # Adicionar a tabela de IDs substituídas
     )
     
     print(f"Arquivo {arquivo_saida} gerado com sucesso!")
