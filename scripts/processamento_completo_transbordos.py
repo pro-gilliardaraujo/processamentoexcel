@@ -55,14 +55,18 @@ def carregar_config_calculos():
         "CD": {
             "motor_ocioso": {
                 "tipo_calculo": "Remover do cálculo",
-                "operacoes_excluidas": []
+                "operacoes_excluidas": [],
+                "grupos_operacao_excluidos": [],
+                "operadores_excluidos": []
             },
             "equipamentos_excluidos": []
         },
         "TT": {
             "motor_ocioso": {
                 "tipo_calculo": "Remover do cálculo",
-                "operacoes_excluidas": []
+                "operacoes_excluidas": [],
+                "grupos_operacao_excluidos": [],
+                "operadores_excluidos": []
             },
             "equipamentos_excluidos": []
         }
@@ -627,8 +631,9 @@ def calcular_motor_ocioso(df):
     """
     Calcula o tempo ocioso do motor para cada operador.
     Exclui do cálculo:
-    - Operações com "MANUTENCAO" ou "MANUTENÇÃO" no nome
-    - Operações do Grupo Operacao "Manutenção"
+    - Operações listadas em operacoes_excluidas no arquivo de configuração
+    - Operações dos grupos listados em grupos_operacao_excluidos
+    - Operadores listados em operadores_excluidos
     
     Args:
         df (DataFrame): DataFrame com os dados processados
@@ -640,20 +645,27 @@ def calcular_motor_ocioso(df):
             - Tempo Ligado (horas com motor ligado)
             - Tempo Ocioso (horas parado com motor ligado)
     """
+    # Carregar configurações
+    config = carregar_config_calculos()
+    
     # Agrupar por operador
     resultados = []
     
     # Filtrar operadores excluídos
     df = df[~df['Operador'].isin(OPERADORES_EXCLUIR)]
     
-    # Excluir operações de manutenção
-    df = df[
-        ~(
-            (df['Grupo Operacao'] == 'Manutenção') |
-            (df['Operacao'].str.contains('MANUTENCAO', case=False, na=False)) |
-            (df['Operacao'].str.contains('MANUTENÇÃO', case=False, na=False))
-        )
-    ]
+    # Excluir operações de acordo com a configuração
+    operacoes_excluidas = config['TT']['motor_ocioso']['operacoes_excluidas']
+    grupos_excluidos = config['TT']['motor_ocioso']['grupos_operacao_excluidos']
+    
+    # Criar máscara para operações excluídas
+    mask_operacoes = df['Operacao'].str.contains('|'.join(operacoes_excluidas), case=False, na=False)
+    
+    # Criar máscara para grupos excluídos
+    mask_grupos = df['Grupo Operacao'].isin(grupos_excluidos)
+    
+    # Aplicar filtros
+    df = df[~(mask_operacoes | mask_grupos)]
     
     # Obter lista de operadores únicos
     operadores = df['Operador'].unique()

@@ -10,7 +10,7 @@
         "1055 - MANOBRA"
       ],
       "grupos_operacao_excluidos": [
-        "Manutenção"
+        "Manutenção", "Inaptidão"
       ]
     },
     "operadores_excluidos": [
@@ -25,13 +25,14 @@
         "9016 - ENCH SISTEMA FREIO",
         "6340 - BASCULANDO  TRANSBORDAGEM",
         "9024 - DESATOLAMENTO",
+        "MANUTENCAO",
         "MANUTENÇÃO",
         "INST CONFIG TECNOL EMBARCADAS",
-        "DESATOLAMENTO",
-        "1055 - MANOBRA"
+        "1055 - MANOBRA",
+        "8030 - CHUVA- VENTO-UMIDADE-TEMPERATURA"
       ],
       "grupos_operacao_excluidos": [
-        "Manutenção"
+        "Manutenção", "Inaptidão"
       ]
     },
     "operadores_excluidos": [
