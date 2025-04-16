@@ -421,9 +421,9 @@ def calcular_base_calculo(df):
         # % Utilização GPS (em decimal 0-1)
         utilizacao_gps = calcular_porcentagem(gps, horas_produtivas)
         
-        # Falta de Apontamento - soma de Diferença_Hora onde Grupo Operacao = 'Sem Apontamento'
+        # Falta de Apontamento - soma de Diferença_Hora onde Operacao = '8340 - FALTA DE APONTAMENTO'
         falta_apontamento = dados_filtrados[
-            dados_filtrados['Grupo Operacao'] == 'Sem Apontamento'
+            dados_filtrados['Operacao'] == '8340 - FALTA DE APONTAMENTO'
         ]['Diferença_Hora'].sum()
         if dias_operador > 1:
             falta_apontamento = falta_apontamento / dias_operador
