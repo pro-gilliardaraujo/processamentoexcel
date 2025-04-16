@@ -164,9 +164,14 @@ def processar_arquivo_base(caminho_arquivo):
             
             # Cálculos adicionais
             RPM_MINIMO = 300  # Definindo constante para RPM mínimo
-            if 'Parada com Motor Ligado' not in df.columns:
-                df['Parada com Motor Ligado'] = ((df['Velocidade'] == 0) & 
-                                               (df['RPM Motor'] >= RPM_MINIMO)).astype(int)
+            
+            # Garantir que Motor Ligado seja numérico (1) ou texto ('LIGADO')
+            if 'Motor Ligado' in df.columns:
+                df['Motor Ligado'] = df['Motor Ligado'].replace({'LIGADO': 1, 'DESLIGADO': 0})
+                df['Motor Ligado'] = pd.to_numeric(df['Motor Ligado'], errors='coerce').fillna(0).astype(int)
+            
+            # Criar coluna Parado com motor ligado
+            df['Parado com motor ligado'] = (df['Velocidade'] == 0) & ((df['Motor Ligado'] == 1) | (df['Motor Ligado'] == 'LIGADO'))
             
             # Verifica se Horas Produtivas já existe
             if 'Horas Produtivas' not in df.columns or df['Horas Produtivas'].isna().any():
@@ -181,7 +186,7 @@ def processar_arquivo_base(caminho_arquivo):
                 df['Horas Produtivas'] = df['Horas Produtivas'].fillna(0)
             
             # Conversão de colunas binárias para valores numéricos (garantindo que sejam números)
-            for col in ['Esteira Ligada', 'Motor Ligado', 'Field Cruiser', 'RTK (Piloto Automatico)', 'Implemento Ligado']:
+            for col in ['Esteira Ligada', 'Field Cruiser', 'RTK (Piloto Automatico)', 'Implemento Ligado']:
                 if col in df.columns:
                     # Se a coluna for texto (LIGADO/DESLIGADO), converter para 1/0
                     if df[col].dtype == 'object':
@@ -533,83 +538,76 @@ def calcular_hora_elevador(df, base_calculo):
 def calcular_motor_ocioso(base_calculo, df_base=None):
     """
     Calcula o percentual de motor ocioso por operador.
-    Usa valores acumulados totais (não médias diárias) para os tempos de motor.
+    
+    Cálculos:
+    - Tempo Ligado: soma de Diferença_Hora onde Motor Ligado = 1 ou 'LIGADO'
+    - Tempo Ocioso: soma de Diferença_Hora onde Motor Ligado = 0 ou 'DESLIGADO'
+    - Porcentagem: Tempo Ocioso / Tempo Ligado
     
     Args:
         base_calculo (DataFrame): Tabela Base Calculo
-        df_base (DataFrame, optional): DataFrame base completo para filtrar operações excluídas
+        df_base (DataFrame): DataFrame base completo para os cálculos originais
     
     Returns:
         DataFrame: Percentual de motor ocioso por operador, tempo operação e tempo ocioso
     """
-    # Carregar configurações para exclusões
-    config = carregar_config_calculos()
-    tipo_equipamento = "CD"  # Colhedoras
+    if df_base is None:
+        print("ERRO: df_base é necessário para calcular motor ocioso corretamente")
+        return pd.DataFrame()
     
-    operacoes_excluidas = []
-    tipo_calculo = "Remover do cálculo"
+    # Filtrar apenas operador TROCA DE TURNO
+    df_base = df_base[df_base['Operador'] != '9999 - TROCA DE TURNO']
     
-    if tipo_equipamento in config and "motor_ocioso" in config[tipo_equipamento]:
-        motor_ocioso_config = config[tipo_equipamento]["motor_ocioso"]
-        if "operacoes_excluidas" in motor_ocioso_config:
-            operacoes_excluidas = motor_ocioso_config["operacoes_excluidas"]
-        if "tipo_calculo" in motor_ocioso_config:
-            tipo_calculo = motor_ocioso_config["tipo_calculo"]
-    
-    # Agrupar por operador (já filtrado pela função calcular_base_calculo)
-    operadores = base_calculo[['Operador', 'Grupo Equipamento/Frente']].drop_duplicates()
+    # Agrupar por operador
+    operadores = df_base['Operador'].unique()
     resultados = []
     
-    for _, row in operadores.iterrows():
-        operador = row['Operador']
-        grupo = row['Grupo Equipamento/Frente']
+    print("\n=== DETALHAMENTO DO CÁLCULO DE MOTOR OCIOSO ===")
+    print("Para conferência manual, use os valores abaixo:")
+    print("Fórmula: Porcentagem = Tempo Ocioso / Tempo Ligado")
+    print("=" * 50)
+    
+    for operador in operadores:
+        # Filtrar dados deste operador
+        dados_op = df_base[df_base['Operador'] == operador]
         
-        # Filtrar dados para este operador e grupo
-        filtro = (base_calculo['Operador'] == operador) & (base_calculo['Grupo Equipamento/Frente'] == grupo)
-        dados_op = base_calculo[filtro]
+        # Tempo Ligado: soma de Diferença_Hora onde Motor Ligado = 1 ou 'LIGADO'
+        tempo_ligado = dados_op[
+            (dados_op['Motor Ligado'] == 1) | 
+            (dados_op['Motor Ligado'] == 'LIGADO')
+        ]['Diferença_Hora'].sum()
         
-        # Para motor ocioso, usamos valores ACUMULADOS TOTAIS, não médias diárias
-        if 'Data' in dados_op.columns:
-            dias_operador = dados_op['Data'].nunique()
-            print(f"Motor ocioso para Operador: {operador} - Total de {dias_operador} dias")
-            
-            # Calcular valores totais multiplicando as médias diárias pelo número de dias
-            motor_ligado_sum = dados_op['Motor Ligado'].sum() * dias_operador
-            parado_motor_sum = dados_op['Parado Com Motor Ligado'].sum() * dias_operador
-        else:
-            # Se não tiver coluna Data, é um único dia, usar valores como estão
-            motor_ligado_sum = dados_op['Motor Ligado'].sum()
-            parado_motor_sum = dados_op['Parado Com Motor Ligado'].sum()
+        # Tempo Ocioso: soma de Diferença_Hora onde Motor Ligado = 0 ou 'DESLIGADO'
+        tempo_ocioso = dados_op[
+            (dados_op['Motor Ligado'] == 0) | 
+            (dados_op['Motor Ligado'] == 'DESLIGADO')
+        ]['Diferença_Hora'].sum()
         
-        # Se temos o df_base e há operações a excluir, ajustar os tempos
-        if df_base is not None and operacoes_excluidas and tipo_calculo == "Remover do cálculo":
-            # Filtrar registros do operador/grupo no df_base
-            filtro_base = (df_base['Operador'] == operador) & (df_base['Grupo Equipamento/Frente'] == grupo)
-            dados_base = df_base[filtro_base]
-            
-            # Calcular tempo em operações excluídas (já é valor acumulado total)
-            tempo_op_excluidas = dados_base[dados_base['Operacao'].isin(operacoes_excluidas)]['Diferença_Hora'].sum()
-            
-            # Ajustar o tempo de motor ligado (remover o tempo em operações excluídas)
-            motor_ligado_sum = max(0, motor_ligado_sum - tempo_op_excluidas)
+        # Calcular porcentagem diretamente: Tempo Ocioso / Tempo Ligado
+        porcentagem = tempo_ocioso / tempo_ligado if tempo_ligado > 0 else 0
         
-        # Calcular a porcentagem (Tempo Ocioso / Tempo Ligado)
-        if motor_ligado_sum > 0:
-            percentual = parado_motor_sum / motor_ligado_sum
-        else:
-            percentual = 0.0
+        # Debug detalhado para verificação
+        print(f"\nOperador: {operador}")
+        print(f"Tempo Ocioso = {tempo_ocioso:.6f}")
+        print(f"Tempo Ligado = {tempo_ligado:.6f}")
+        print(f"Cálculo: {tempo_ocioso:.6f} / {tempo_ligado:.6f} = {porcentagem:.6f}")
+        print(f"Para conferir no Excel: =ARRED({tempo_ocioso:.6f}/{tempo_ligado:.6f};6)")
+        print("-" * 50)
         
         resultados.append({
             'Operador': operador,
-            'Porcentagem': percentual,
-            'Tempo Ligado': motor_ligado_sum,
-            'Tempo Ocioso': parado_motor_sum
+            'Porcentagem': porcentagem,
+            'Tempo Ligado': tempo_ligado,
+            'Tempo Ocioso': tempo_ocioso
         })
     
-    # Criar DataFrame e organizar colunas na ordem desejada
+    # Criar DataFrame com os resultados
     df_resultado = pd.DataFrame(resultados)
+    
     if not df_resultado.empty:
-        df_resultado = df_resultado[['Operador', 'Porcentagem', 'Tempo Ligado', 'Tempo Ocioso']]
+        df_resultado = df_resultado[[
+            'Operador', 'Porcentagem', 'Tempo Ligado', 'Tempo Ocioso'
+        ]]
     
     return df_resultado
 
@@ -856,19 +854,15 @@ def criar_excel_com_planilhas(df_base, base_calculo, disp_mecanica, eficiencia_e
     disp_mecanica['Disponibilidade'] = disp_mecanica['Disponibilidade'].apply(lambda x: round(x, 4))
     eficiencia_energetica['Eficiência'] = eficiencia_energetica['Eficiência'].apply(lambda x: round(x, 4))
     hora_elevador['Horas'] = hora_elevador['Horas'].apply(lambda x: round(x, 2))
-    motor_ocioso['Tempo Ligado'] = motor_ocioso['Tempo Ligado'].apply(lambda x: round(x, 2))
-    motor_ocioso['Tempo Ocioso'] = motor_ocioso['Tempo Ocioso'].apply(lambda x: round(x, 2))
-    motor_ocioso['Porcentagem'] = motor_ocioso['Porcentagem'].apply(lambda x: round(x, 4))
+    
+    # Motor Ocioso - Manter precisão completa
+    # Removido o arredondamento dos valores de motor_ocioso
+    
     uso_gps['Porcentagem'] = uso_gps['Porcentagem'].apply(lambda x: round(x, 4))
     
     # Arredondar apenas as colunas originais em horas_por_frota (mantendo as novas colunas intactas)
     horas_por_frota['Horas Registradas'] = horas_por_frota['Horas Registradas'].apply(lambda x: round(x, 2))
     horas_por_frota['Diferença para 24h'] = horas_por_frota['Diferença para 24h'].apply(lambda x: round(x, 2))
-    
-    # Arredondar as colunas de falta por dia
-    for col in horas_por_frota.columns:
-        if col.startswith('Falta '):
-            horas_por_frota[col] = horas_por_frota[col].apply(lambda x: round(x, 2) if pd.notna(x) else x)
     
     # Salvar cada DataFrame em uma planilha separada
     df_base.to_excel(writer, sheet_name='BASE', index=False)
@@ -928,15 +922,36 @@ def criar_excel_com_planilhas(df_base, base_calculo, disp_mecanica, eficiencia_e
     for row in range(2, worksheet.max_row + 1):
         # Porcentagem (coluna B)
         cell_porc = worksheet.cell(row=row, column=2)
-        cell_porc.number_format = '0.00%'  # Formato de porcentagem com 2 casas
+        cell_porc.number_format = '0.000000'  # 6 casas decimais
         
         # Tempo Ligado (coluna C)
         cell_tempo_ligado = worksheet.cell(row=row, column=3)
-        cell_tempo_ligado.number_format = '0.00'  # Formato decimal com 2 casas
+        cell_tempo_ligado.number_format = '0.000000'  # 6 casas decimais
         
         # Tempo Ocioso (coluna D)
         cell_tempo_oc = worksheet.cell(row=row, column=4)
-        cell_tempo_oc.number_format = '0.00'  # Formato decimal com 2 casas
+        cell_tempo_oc.number_format = '0.000000'  # 6 casas decimais
+        
+        # Não arredondar os valores, usar os números exatos
+        tempo_ligado = float(cell_tempo_ligado.value) if cell_tempo_ligado.value else 0
+        tempo_ocioso = float(cell_tempo_oc.value) if cell_tempo_oc.value else 0
+        
+        # Recalcular a porcentagem usando os valores exatos
+        if tempo_ligado > 0:
+            porcentagem = tempo_ocioso / tempo_ligado
+            # Atualizar o valor da célula com o cálculo exato
+            cell_porc.value = porcentagem
+            
+            print(f"\nLinha {row} na planilha Motor Ocioso:")
+            print(f"Tempo Ocioso (exato): {tempo_ocioso}")
+            print(f"Tempo Ligado (exato): {tempo_ligado}")
+            print(f"Porcentagem (exata): {porcentagem}")
+            
+            # Verificar se o valor na célula está correto
+            if abs(float(cell_porc.value) - porcentagem) > 0.000001:
+                print(f"AVISO: Diferença detectada!")
+                print(f"Valor na célula: {float(cell_porc.value)}")
+                print(f"Valor calculado: {porcentagem}")
     
     # Formatar planilha de Uso GPS
     worksheet = workbook['5_Uso GPS']

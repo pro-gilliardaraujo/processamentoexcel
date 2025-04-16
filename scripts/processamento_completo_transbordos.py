@@ -608,92 +608,65 @@ def calcular_eficiencia_energetica(base_calculo):
 def calcular_motor_ocioso(base_calculo, df_base=None):
     """
     Calcula o percentual de motor ocioso por operador.
-    Usa valores acumulados totais (não médias diárias) para os tempos de motor.
+    
+    Cálculos:
+    - Tempo Ligado: soma de Diferença_Hora onde Motor Ligado = 1
+    - Tempo Ocioso: soma de Diferença_Hora onde Parado com motor ligado = True
+    - Porcentagem: Tempo Ocioso / Tempo Ligado (mantido como decimal puro)
     
     Args:
         base_calculo (DataFrame): Tabela Base Calculo
-        df_base (DataFrame, optional): DataFrame base completo para filtrar operações excluídas
+        df_base (DataFrame): DataFrame base completo para os cálculos originais
     
     Returns:
         DataFrame: Percentual de motor ocioso por operador, tempo operação e tempo ocioso
     """
-    # Carregar configurações para exclusões
-    config = carregar_config_calculos()
-    tipo_equipamento = "TR"  # Transbordos
+    if df_base is None:
+        print("ERRO: df_base é necessário para calcular motor ocioso corretamente")
+        return pd.DataFrame()
     
-    operacoes_excluidas = []
-    tipo_calculo = "Remover do cálculo"
-    
-    if tipo_equipamento in config and "motor_ocioso" in config[tipo_equipamento]:
-        motor_ocioso_config = config[tipo_equipamento]["motor_ocioso"]
-        if "operacoes_excluidas" in motor_ocioso_config:
-            operacoes_excluidas = motor_ocioso_config["operacoes_excluidas"]
-        if "tipo_calculo" in motor_ocioso_config:
-            tipo_calculo = motor_ocioso_config["tipo_calculo"]
-    
-    # Agrupar por operador (já filtrado pela função calcular_base_calculo)
-    operadores = base_calculo[['Operador', 'Grupo Equipamento/Frente']].drop_duplicates()
+    # Agrupar por operador
+    operadores = df_base['Operador'].unique()
     resultados = []
     
-    for _, row in operadores.iterrows():
-        operador = row['Operador']
-        grupo = row['Grupo Equipamento/Frente']
+    for operador in operadores:
+        # Filtrar dados deste operador
+        dados_op = df_base[df_base['Operador'] == operador]
         
-        # Filtrar dados para este operador e grupo
-        filtro = (base_calculo['Operador'] == operador) & (base_calculo['Grupo Equipamento/Frente'] == grupo)
-        dados_op = base_calculo[filtro]
+        # Tempo Ligado: soma de Diferença_Hora onde Motor Ligado = 1
+        tempo_ligado = dados_op[
+            (dados_op['Motor Ligado'] == 1) | 
+            (dados_op['Motor Ligado'] == 'LIGADO')
+        ]['Diferença_Hora'].sum()
         
-        # Para motor ocioso, usamos valores ACUMULADOS TOTAIS, não médias diárias
-        if 'Data' in dados_op.columns:
-            dias_operador = dados_op['Data'].nunique()
-            print(f"Motor ocioso para Operador: {operador} - Total de {dias_operador} dias")
-            
-            # Calcular valores totais multiplicando as médias diárias pelo número de dias
-            motor_ligado_sum = dados_op['Motor Ligado'].sum() * dias_operador
-            parado_motor_sum = dados_op['Parado com motor ligado'].sum() * dias_operador
-        else:
-            # Se não tiver coluna Data, é um único dia, usar valores como estão
-            motor_ligado_sum = dados_op['Motor Ligado'].sum()
-            parado_motor_sum = dados_op['Parado com motor ligado'].sum()
+        # Tempo Ocioso: soma de Diferença_Hora onde Parado com motor ligado = True
+        tempo_ocioso = dados_op[
+            dados_op['Parado com motor ligado'] == True
+        ]['Diferença_Hora'].sum()
         
-        # Se temos o df_base e há operações a excluir, ajustar os tempos
-        if df_base is not None and operacoes_excluidas and tipo_calculo == "Remover do cálculo":
-            # Filtrar registros do operador/grupo no df_base
-            filtro_base = (df_base['Operador'] == operador) & (df_base['Grupo Equipamento/Frente'] == grupo)
-            dados_base = df_base[filtro_base]
-            
-            # Calcular tempo em operações excluídas (já é valor acumulado total)
-            tempo_op_excluidas = dados_base[dados_base['Operacao'].isin(operacoes_excluidas)]['Diferença_Hora'].sum()
-            
-            # Ajustar o tempo de motor ligado (remover o tempo em operações excluídas)
-            motor_ligado_sum = max(0, motor_ligado_sum - tempo_op_excluidas)
+        # Divisão direta, sem formatação
+        porcentagem = tempo_ocioso / tempo_ligado if tempo_ligado > 0 else 0
         
-        # Inicialmente, definir a porcentagem como 0
-        percentual = 0.0
-        
-        # Calcular a porcentagem apenas se o tempo ligado for maior que zero
-        if motor_ligado_sum > 0:
-            percentual = parado_motor_sum / motor_ligado_sum
+        # Debug para verificar os valores exatos
+        print(f"\nOperador: {operador}")
+        print(f"Tempo Ocioso (soma onde Parado com motor ligado = True): {tempo_ocioso}")
+        print(f"Tempo Ligado (soma onde Motor Ligado = 1): {tempo_ligado}")
+        print(f"Divisão direta: {tempo_ocioso} / {tempo_ligado} = {porcentagem}")
         
         resultados.append({
             'Operador': operador,
-            'Porcentagem': percentual,
-            'Tempo Ligado': motor_ligado_sum,
-            'Tempo Ocioso': parado_motor_sum
+            'Porcentagem': porcentagem,
+            'Tempo Ligado': tempo_ligado,
+            'Tempo Ocioso': tempo_ocioso
         })
     
     # Criar DataFrame com os resultados
     df_resultado = pd.DataFrame(resultados)
     
     if not df_resultado.empty:
-        # Garantir que temos todas as colunas necessárias
-        df_resultado = df_resultado[['Operador', 'Porcentagem', 'Tempo Ligado', 'Tempo Ocioso']]
-        
-        # Recalcular a porcentagem no final para garantir precisão
-        df_resultado['Porcentagem'] = df_resultado.apply(
-            lambda row: row['Tempo Ocioso'] / row['Tempo Ligado'] if row['Tempo Ligado'] > 0 else 0,
-            axis=1
-        )
+        df_resultado = df_resultado[[
+            'Operador', 'Porcentagem', 'Tempo Ligado', 'Tempo Ocioso'
+        ]]
     
     return df_resultado
 
