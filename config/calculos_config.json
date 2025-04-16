@@ -6,7 +6,8 @@
         "8490 - LAVAGEM",
         "MANUTENCAO",
         "LAVAGEM",
-        "INST CONFIG TECNOL EMBARCADAS"
+        "INST CONFIG TECNOL EMBARCADAS",
+        "1055 - MANOBRA"
       ],
       "grupos_operacao_excluidos": [
         "Manutenção"
@@ -26,7 +27,8 @@
         "9024 - DESATOLAMENTO",
         "MANUTENÇÃO",
         "INST CONFIG TECNOL EMBARCADAS",
-        "DESATOLAMENTO"
+        "DESATOLAMENTO",
+        "1055 - MANOBRA"
       ],
       "grupos_operacao_excluidos": [
         "Manutenção"

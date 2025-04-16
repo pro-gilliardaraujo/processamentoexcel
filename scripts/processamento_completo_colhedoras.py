@@ -31,7 +31,8 @@ COLUNAS_REMOVER = [
     'Unidade',
     'Centro de Custo',
     'Trabalhando em File',
-    'Trabalhando Frente Dividida'
+    'Trabalhando Frente Dividida',
+    'Trabalhando em Fila'
 ]
 
 COLUNAS_DESEJADAS = [
@@ -69,14 +70,16 @@ def carregar_config_calculos():
         "CD": {
             "motor_ocioso": {
                 "tipo_calculo": "Remover do cálculo",
-                "operacoes_excluidas": []
+                "operacoes_excluidas": [],
+                "grupos_operacao_excluidos": []
             },
             "equipamentos_excluidos": []
         },
         "TR": {
             "motor_ocioso": {
                 "tipo_calculo": "Remover do cálculo",
-                "operacoes_excluidas": []
+                "operacoes_excluidas": [],
+                "grupos_operacao_excluidos": []
             },
             "equipamentos_excluidos": []
         }
@@ -146,55 +149,38 @@ def processar_arquivo_base(caminho_arquivo):
             
             # Verificar se 'Data/Hora' existe e processá-la
             if 'Data/Hora' in df.columns:
+                # Processamento de data e hora
                 df[['Data', 'Hora']] = df['Data/Hora'].str.split(' ', expand=True)
                 df = df.drop(columns=['Data/Hora'])
-            
-            # Manter a coluna Hora como string no formato HH:MM:SS
-            # Não converter para datetime para evitar a adição da data
-            if 'Hora' in df.columns:
-                # Garantir que a coluna Hora esteja no formato correto
-                df['Hora'] = df['Hora'].astype(str).str.strip()
-                # Remover qualquer data que possa ter sido adicionada
-                df['Hora'] = df['Hora'].apply(lambda x: x.split(' ')[-1] if ' ' in x else x)
-                # Garantir que o formato seja HH:MM:SS
-                df['Hora'] = df['Hora'].apply(lambda x: x if len(x) >= 8 else f"0{x}" if len(x) == 7 else x)
-            
-            # IMPORTANTE: Calcular a Diferença_Hora mantendo a ordem original dos registros
-            # Não reordenar os dados para preservar a sequência original
-            # Converter Hora para datetime apenas para o cálculo da diferença
-            df_temp = df.copy()
-            df_temp['Hora_Calc'] = pd.to_datetime(df_temp['Hora'], format='%H:%M:%S', errors='coerce')
-            df['Diferença_Hora'] = df_temp['Hora_Calc'].diff().dt.total_seconds() / 3600
-            # Aplicar regras para a Diferença_Hora
-            df['Diferença_Hora'] = df['Diferença_Hora'].apply(lambda x: max(x, 0))
-            # Nova regra: se Diferença_Hora > 0.50, então 0
-            df['Diferença_Hora'] = df['Diferença_Hora'].apply(lambda x: 0 if x > 0.50 else x)
-            
-            print(f"Diferença_Hora calculada mantendo a ordem original dos registros. Soma total: {df['Diferença_Hora'].sum():.2f} horas")
+                
+                # Conversão e cálculo de diferenças de hora
+                df['Hora'] = pd.to_datetime(df['Hora'], format='%H:%M:%S')
+                df['Diferença_Hora'] = df['Hora'].diff().dt.total_seconds() / 3600
+                df['Diferença_Hora'] = df['Diferença_Hora'].apply(lambda x: max(x, 0))
+                
+                # Nova regra: se Diferença_Hora > 0.50, então 0
+                df['Diferença_Hora'] = df['Diferença_Hora'].apply(lambda x: 0 if x > 0.50 else x)
             
             # Cálculos adicionais
             RPM_MINIMO = 300  # Definindo constante para RPM mínimo
-            
-            # Converter valores booleanos para 1/0
-            colunas_booleanas = ['Motor Ligado', 'Esteira Ligada', 'Field Cruiser', 
-                               'RTK (Piloto Automatico)', 'Implemento Ligado']
-            
-            for col in colunas_booleanas:
-                if col in df.columns:
-                    # Converter para string primeiro para garantir consistência
-                    df[col] = df[col].astype(str).str.upper()
-                    # Aplicar o mapeamento
-                    df[col] = df[col].map(MAPEAMENTO_BOOLEANO).fillna(0).astype(int)
-            
-            # Verificar se a coluna "Parada com Motor Ligado" já existe
-            if 'Parada com Motor Ligado' in df.columns:
-                # Converter para string primeiro para garantir consistência
-                df['Parada com Motor Ligado'] = df['Parada com Motor Ligado'].astype(str).str.upper()
-                # Aplicar o mapeamento
-                df['Parada com Motor Ligado'] = df['Parada com Motor Ligado'].map(MAPEAMENTO_BOOLEANO).fillna(0).astype(int)
-            else:
-                # Criar coluna Parada com Motor Ligado
-                df['Parada com Motor Ligado'] = ((df['Velocidade'] == 0) & (df['Motor Ligado'] == 1)).astype(int)
+
+            # Carregar configurações
+            config = carregar_config_calculos()
+            operacoes_excluidas = config['CD']['motor_ocioso']['operacoes_excluidas']
+            grupos_operacao_excluidos = config['CD']['motor_ocioso']['grupos_operacao_excluidos']
+
+            # Filtrar dados para cálculo de motor ocioso
+            df_motor_ocioso = df[
+                ~df['Operacao'].isin(operacoes_excluidas) & 
+                ~df['Grupo Operacao'].isin(grupos_operacao_excluidos)
+            ]
+
+            # Calcular Parada com Motor Ligado usando dados filtrados
+            df['Parada com Motor Ligado'] = 0  # Inicializa com 0
+            df.loc[df_motor_ocioso.index, 'Parada com Motor Ligado'] = (
+                (df_motor_ocioso['Velocidade'] == 0) & 
+                (df_motor_ocioso['RPM Motor'] >= RPM_MINIMO)
+            ).astype(int)
             
             # Verifica se Horas Produtivas já existe
             if 'Horas Produtivas' not in df.columns or df['Horas Produtivas'].isna().any():
@@ -486,33 +472,50 @@ def calcular_horas_por_frota(df):
     
     return pd.DataFrame(resultados)
 
-def calcular_motor_ocioso(base_calculo, df_base=None):
+def calcular_motor_ocioso(base_calculo, df_base):
     """
     Calcula o percentual de motor ocioso por operador usando os dados da Base Calculo.
     Agrega os dados por operador, calculando a média quando um operador aparece em múltiplas frotas.
     
     Args:
         base_calculo (DataFrame): Tabela Base Calculo
-        df_base (DataFrame): Não usado mais, mantido para compatibilidade
+        df_base (DataFrame): DataFrame base para aplicar filtros de operações
     
     Returns:
         DataFrame: Percentual de motor ocioso por operador (agregado)
     """
-    # Agrupar por operador e calcular as somas
-    agrupado = base_calculo.groupby('Operador').agg({
-        'Motor Ligado': 'sum',
-        'Parado Com Motor Ligado': 'sum'
-    }).reset_index()
-    
+    # Carregar configurações
+    config = carregar_config_calculos()
+    operacoes_excluidas = config['CD']['motor_ocioso']['operacoes_excluidas']
+    grupos_operacao_excluidos = config['CD']['motor_ocioso']['grupos_operacao_excluidos']
+
+    # Filtrar dados base excluindo operações configuradas
+    df_filtrado = df_base[
+        ~df_base['Operacao'].isin(operacoes_excluidas) & 
+        ~df_base['Grupo Operacao'].isin(grupos_operacao_excluidos)
+    ]
+
+    # Agrupar por operador e calcular as somas apenas dos dados filtrados
     resultados = []
     print("\n=== DETALHAMENTO DO CÁLCULO DE MOTOR OCIOSO (AGREGADO) ===")
-    print("Usando dados da Base Calculo")
+    print("Usando dados filtrados (excluindo operações configuradas)")
     print("=" * 50)
-    
-    for _, row in agrupado.iterrows():
-        operador = row['Operador']
-        tempo_ligado = row['Motor Ligado']
-        tempo_ocioso = row['Parado Com Motor Ligado']
+
+    # Agrupar por operador
+    for operador in df_filtrado['Operador'].unique():
+        if operador in OPERADORES_EXCLUIR:
+            continue
+
+        # Filtrar dados do operador
+        dados_operador = df_filtrado[df_filtrado['Operador'] == operador]
+        
+        # Calcular tempo total com motor ligado
+        tempo_ligado = dados_operador[dados_operador['Motor Ligado'] == 1]['Diferença_Hora'].sum()
+        
+        # Calcular tempo ocioso (parado com motor ligado)
+        tempo_ocioso = dados_operador[dados_operador['Parada com Motor Ligado'] == 1]['Diferença_Hora'].sum()
+        
+        # Calcular porcentagem de tempo ocioso
         porcentagem = tempo_ocioso / tempo_ligado if tempo_ligado > 0 else 0
         
         print(f"\nOperador: {operador}")

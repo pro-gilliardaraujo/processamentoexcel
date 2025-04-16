@@ -266,7 +266,7 @@ def processar_arquivo_base(caminho_arquivo):
                     df[col] = df[col].replace({1: 'LIGADO', 0: 'DESLIGADO'})
             
             # Criar a coluna "Parado com motor ligado" exatamente como no Codigo_Base_TT.py
-            df['Parado com motor ligado'] = (df['Velocidade'] == 0) & (df['Motor Ligado'] == 'LIGADO')
+            df['Parado com motor ligado'] = ((df['Velocidade'] == 0) & (df['Motor Ligado'] == 'LIGADO')).astype(int)
             
             # Verifica se Horas Produtivas já existe, senão calcula usando método do Codigo_Base_TT.py
             if 'Horas Produtivas' not in df.columns or df['Horas Produtivas'].isna().any():
@@ -626,10 +626,13 @@ def calcular_eficiencia_energetica(base_calculo):
 def calcular_motor_ocioso(df):
     """
     Calcula o tempo ocioso do motor para cada operador.
+    Exclui do cálculo:
+    - Operações com "MANUTENCAO" ou "MANUTENÇÃO" no nome
+    - Operações do Grupo Operacao "Manutenção"
     
     Args:
         df (DataFrame): DataFrame com os dados processados
-        
+    
     Returns:
         DataFrame: DataFrame com as colunas:
             - Operador
@@ -642,6 +645,15 @@ def calcular_motor_ocioso(df):
     
     # Filtrar operadores excluídos
     df = df[~df['Operador'].isin(OPERADORES_EXCLUIR)]
+    
+    # Excluir operações de manutenção
+    df = df[
+        ~(
+            (df['Grupo Operacao'] == 'Manutenção') |
+            (df['Operacao'].str.contains('MANUTENCAO', case=False, na=False)) |
+            (df['Operacao'].str.contains('MANUTENÇÃO', case=False, na=False))
+        )
+    ]
     
     # Obter lista de operadores únicos
     operadores = df['Operador'].unique()
@@ -657,7 +669,7 @@ def calcular_motor_ocioso(df):
         
         # Calcular tempo ocioso (parado com motor ligado)
         tempo_ocioso = dados_operador[
-            dados_operador['Parado com motor ligado'] == True
+            dados_operador['Parado com motor ligado'] == 1
         ]['Diferença_Hora'].sum()
         
         # Calcular porcentagem de tempo ocioso
