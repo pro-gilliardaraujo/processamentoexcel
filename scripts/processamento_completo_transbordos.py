@@ -323,8 +323,8 @@ def calcular_base_calculo(df):
     
     Cálculos principais:
     - Horas totais: soma de Diferença_Hora
-    - Motor Ligado: soma de Diferença_Hora onde Motor Ligado = 1
-    - Parado com motor ligado: soma de Diferença_Hora onde Motor Ligado = 1 E Velocidade = 0
+    - Motor Ligado: soma de Diferença_Hora onde Motor Ligado = LIGADO
+    - Parado com motor ligado: soma de Diferença_Hora onde Motor Ligado = LIGADO E Velocidade = 0
     - GPS: soma de Diferença_Hora onde RTK = 1
     
     Args:
@@ -374,16 +374,16 @@ def calcular_base_calculo(df):
         if dias_operador > 1:
             horas_totais = horas_totais / dias_operador
         
-        # Motor Ligado - soma de Diferença_Hora onde Motor Ligado = 1
+        # Motor Ligado - soma de Diferença_Hora onde Motor Ligado = LIGADO
         motor_ligado = dados_filtrados[
-            dados_filtrados['Motor Ligado'] == 1
+            dados_filtrados['Motor Ligado'] == 'LIGADO'
         ]['Diferença_Hora'].sum()
         if dias_operador > 1:
             motor_ligado = motor_ligado / dias_operador
         
-        # Parado com motor ligado - soma de Diferença_Hora onde Motor Ligado = 1 E Velocidade = 0
+        # Parado com motor ligado - soma de Diferença_Hora onde Motor Ligado = LIGADO E Velocidade = 0
         parado_motor_ligado = dados_filtrados[
-            (dados_filtrados['Motor Ligado'] == 1) & 
+            (dados_filtrados['Motor Ligado'] == 'LIGADO') & 
             (dados_filtrados['Velocidade'] == 0)
         ]['Diferença_Hora'].sum()
         if dias_operador > 1:
@@ -640,7 +640,7 @@ def calcular_motor_ocioso(df):
         
         # Calcular tempo total com motor ligado
         tempo_ligado = dados_operador[
-            dados_operador['Motor Ligado'] == 1
+            dados_operador['Motor Ligado'] == 'LIGADO'
         ]['Diferença_Hora'].sum()
         
         # Calcular tempo ocioso (parado com motor ligado)
