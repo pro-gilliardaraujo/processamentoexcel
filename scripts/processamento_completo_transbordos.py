@@ -43,6 +43,58 @@ COLUNAS_DESEJADAS = [
 # Valores a serem filtrados
 OPERADORES_EXCLUIR = ["9999 - TROCA DE TURNO"]
 
+def carregar_config_calculos():
+    """
+    Carrega as configurações de cálculos do arquivo JSON.
+    Se o arquivo não existir, retorna configurações padrão.
+    """
+    config_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "config", "calculos_config.json")
+    
+    # Configuração padrão
+    config_padrao = {
+        "CD": {
+            "motor_ocioso": {
+                "tipo_calculo": "Remover do cálculo",
+                "operacoes_excluidas": []
+            },
+            "equipamentos_excluidos": []
+        },
+        "TT": {
+            "motor_ocioso": {
+                "tipo_calculo": "Remover do cálculo",
+                "operacoes_excluidas": []
+            },
+            "equipamentos_excluidos": []
+        }
+    }
+    
+    try:
+        if os.path.exists(config_path):
+            with open(config_path, 'r', encoding='utf-8') as f:
+                config = json.load(f)
+                
+                # Garantir que os equipamentos excluídos sejam tratados como texto
+                for tipo in ["CD", "TT"]:
+                    if tipo in config and "equipamentos_excluidos" in config[tipo]:
+                        config[tipo]["equipamentos_excluidos"] = [str(eq).replace('.0', '') for eq in config[tipo]["equipamentos_excluidos"]]
+                
+                return config
+        else:
+            # Criar diretório config se não existir
+            config_dir = os.path.dirname(config_path)
+            if not os.path.exists(config_dir):
+                os.makedirs(config_dir)
+                
+            # Criar arquivo de configuração padrão
+            with open(config_path, 'w', encoding='utf-8') as f:
+                json.dump(config_padrao, f, indent=4, ensure_ascii=False)
+                
+            print(f"Arquivo de configuração criado em {config_path} com valores padrão.")
+            return config_padrao
+    except Exception as e:
+        print(f"Erro ao carregar configurações: {str(e)}. Usando configuração padrão.")
+        return config_padrao
+
 def carregar_substituicoes_operadores():
     """
     Carrega o arquivo substituiroperadores.json que contém os mapeamentos 
@@ -59,7 +111,7 @@ def carregar_substituicoes_operadores():
     diretorio_raiz = os.path.dirname(diretorio_script)
     
     # Caminho para o arquivo de substituição
-    arquivo_substituicao = os.path.join(diretorio_raiz, "substituiroperadores.json")
+    arquivo_substituicao = os.path.join(diretorio_raiz, "config", "substituiroperadores.json")
     
     # Verificar se o arquivo existe
     if not os.path.exists(arquivo_substituicao):
@@ -532,18 +584,16 @@ def calcular_eficiencia_energetica(base_calculo):
     
     return pd.DataFrame(resultados)
 
-def calcular_motor_ocioso(base_calculo):
+def calcular_motor_ocioso(base_calculo, df_base=None):
     """
     Calcula o percentual de motor ocioso por operador.
-    Usa os dados já calculados em base_calculo conforme a fórmula do Excel:
-    =SOMASES(BASE!Q:Q;BASE!P:P;'Base Calculo'!$H$1;BASE!L:L;'Base Calculo'!C3;BASE!G:G;'Base Calculo'!B3;BASE!C:C;'Base Calculo'!A3) 
-    para o valor decimal e =SEERRO(H3/G3;"SEM DADOS") para a porcentagem
     
     Args:
         base_calculo (DataFrame): Tabela Base Calculo
-    
+        df_base (DataFrame, optional): DataFrame base completo para filtrar operações excluídas
+        
     Returns:
-        DataFrame: Percentual de motor ocioso por operador
+        DataFrame: Percentual de motor ocioso por operador, tempo operação e tempo ocioso
     """
     # Função para calcular valores com alta precisão e depois formatar
     def calcular_porcentagem(numerador, denominador, precisao=4):
@@ -551,6 +601,20 @@ def calcular_motor_ocioso(base_calculo):
         if denominador > 0:
             return round((numerador / denominador), precisao)
         return 0.0
+    
+    # Carregar configurações para exclusões
+    config = carregar_config_calculos()
+    tipo_equipamento = "TT"  # Transbordos/Tratores
+    
+    operacoes_excluidas = []
+    tipo_calculo = "Remover do cálculo"
+    
+    if tipo_equipamento in config and "motor_ocioso" in config[tipo_equipamento]:
+        motor_ocioso_config = config[tipo_equipamento]["motor_ocioso"]
+        if "operacoes_excluidas" in motor_ocioso_config:
+            operacoes_excluidas = motor_ocioso_config["operacoes_excluidas"]
+        if "tipo_calculo" in motor_ocioso_config:
+            tipo_calculo = motor_ocioso_config["tipo_calculo"]
     
     # Agrupar por operador (já filtrado pela função calcular_base_calculo)
     operadores = base_calculo[['Operador', 'Grupo Equipamento/Frente']].drop_duplicates()
@@ -565,20 +629,36 @@ def calcular_motor_ocioso(base_calculo):
         dados_op = base_calculo[filtro]
         
         # Motor Ocioso = Parado com motor ligado / Motor Ligado
-        # Isso corresponde à fórmula do Excel: =SEERRO(H3/G3;"SEM DADOS")
-        # onde H3 é o valor de "Parado com motor ligado" e G3 é o valor de "Motor Ligado"
-        parado_motor_sum = dados_op['Parado com motor ligado'].sum()
-        motor_ligado_sum = dados_op['Motor Ligado'].sum()
+        parado_motor_sum = round(dados_op['Parado com motor ligado'].sum(), 4)
+        motor_ligado_sum = round(dados_op['Motor Ligado'].sum(), 4)
         
-        # Se o motor ligado for zero, retornar "SEM DADOS" (representado como zero aqui)
+        # Se temos o df_base e há operações a excluir, ajustar os tempos
+        if df_base is not None and operacoes_excluidas and tipo_calculo == "Remover do cálculo":
+            # Filtrar registros do operador/grupo no df_base
+            filtro_base = (df_base['Operador'] == operador) & (df_base['Grupo Equipamento/Frente'] == grupo)
+            dados_base = df_base[filtro_base]
+            
+            # Calcular tempo em operações excluídas
+            tempo_op_excluidas = round(dados_base[dados_base['Operacao'].isin(operacoes_excluidas)]['Diferença_Hora'].sum(), 4)
+            
+            # Ajustar o tempo de motor ligado (remover o tempo em operações excluídas)
+            motor_ligado_sum = max(0, motor_ligado_sum - tempo_op_excluidas)
+        
         percentual = calcular_porcentagem(parado_motor_sum, motor_ligado_sum)
         
         resultados.append({
             'Operador': operador,
-            'Porcentagem': percentual
+            'Porcentagem': percentual,
+            'Tempo Operação': motor_ligado_sum,
+            'Tempo Ocioso': parado_motor_sum
         })
     
-    return pd.DataFrame(resultados)
+    # Criar DataFrame e organizar colunas na ordem desejada
+    df_resultado = pd.DataFrame(resultados)
+    if not df_resultado.empty:
+        df_resultado = df_resultado[['Operador', 'Porcentagem', 'Tempo Operação', 'Tempo Ocioso']]
+    
+    return df_resultado
 
 def calcular_falta_apontamento(base_calculo):
     """
@@ -891,8 +971,17 @@ def criar_excel_com_planilhas(df_base, base_calculo, disp_mecanica, eficiencia_e
     worksheet = workbook['3_Motor Ocioso']
     ajustar_largura_colunas(worksheet)
     for row in range(2, worksheet.max_row + 1):
-        cell = worksheet.cell(row=row, column=2)  # Coluna B (Porcentagem)
-        cell.number_format = '0.00%'  # Formato de porcentagem com 2 casas
+        # Porcentagem (coluna B)
+        cell_porc = worksheet.cell(row=row, column=2)
+        cell_porc.number_format = '0.00%'  # Formato de porcentagem com 2 casas
+        
+        # Tempo Operação (coluna C)
+        cell_tempo_op = worksheet.cell(row=row, column=3)
+        cell_tempo_op.number_format = '0.00'  # Formato decimal com 2 casas
+        
+        # Tempo Ocioso (coluna D)
+        cell_tempo_oc = worksheet.cell(row=row, column=4)
+        cell_tempo_oc.number_format = '0.00'  # Formato decimal com 2 casas
     
     # Formatar planilha de Falta Apontamento
     worksheet = workbook['4_Falta Apontamento']
@@ -923,16 +1012,14 @@ def criar_excel_com_planilhas(df_base, base_calculo, disp_mecanica, eficiencia_e
         # Formatar colunas decimais
         columns_decimal = [4, 5]  # Colunas D e E (Horas totais, GPS)
         for col in columns_decimal:
-            if col <= worksheet.max_column:
-                cell = worksheet.cell(row=row, column=col)
-                cell.number_format = '0.00'  # Formato decimal com 2 casas
+            cell = worksheet.cell(row=row, column=col)
+            cell.number_format = '0.00'  # Formato decimal com 2 casas
         
         # Formatar colunas de porcentagem
         columns_percent = [6, 8, 9, 10]  # Colunas %, % Motor Ocioso, % Falta Apontamento, % Utilização GPS
         for col in columns_percent:
-            if col <= worksheet.max_column:
-                cell = worksheet.cell(row=row, column=col)
-                cell.number_format = '0.00%'  # Formato de porcentagem com 2 casas
+            cell = worksheet.cell(row=row, column=col)
+            cell.number_format = '0.00%'  # Formato de porcentagem com 2 casas
         
         # Formatar coluna Motor Ligado
         if worksheet.max_column >= 7:
@@ -1195,7 +1282,7 @@ def processar_arquivo(caminho_arquivo, diretorio_saida):
     # Calcular as métricas auxiliares
     disp_mecanica = calcular_disponibilidade_mecanica(df_base)
     eficiencia_energetica = calcular_eficiencia_energetica(base_calculo)
-    motor_ocioso = calcular_motor_ocioso(base_calculo)
+    motor_ocioso = calcular_motor_ocioso(base_calculo, df_base)
     falta_apontamento = calcular_falta_apontamento(base_calculo)
     uso_gps = calcular_uso_gps(base_calculo)
     horas_por_frota = calcular_horas_por_frota(df_base)

@@ -46,6 +46,58 @@ COLUNAS_DESEJADAS = [
 # Valores a serem filtrados
 OPERADORES_EXCLUIR = ["9999 - TROCA DE TURNO"]
 
+def carregar_config_calculos():
+    """
+    Carrega as configurações de cálculos do arquivo JSON.
+    Se o arquivo não existir, retorna configurações padrão.
+    """
+    config_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "config", "calculos_config.json")
+    
+    # Configuração padrão
+    config_padrao = {
+        "CD": {
+            "motor_ocioso": {
+                "tipo_calculo": "Remover do cálculo",
+                "operacoes_excluidas": []
+            },
+            "equipamentos_excluidos": []
+        },
+        "TR": {
+            "motor_ocioso": {
+                "tipo_calculo": "Remover do cálculo",
+                "operacoes_excluidas": []
+            },
+            "equipamentos_excluidos": []
+        }
+    }
+    
+    try:
+        if os.path.exists(config_path):
+            with open(config_path, 'r', encoding='utf-8') as f:
+                config = json.load(f)
+                
+                # Garantir que os equipamentos excluídos sejam tratados como texto
+                for tipo in ["CD", "TR"]:
+                    if tipo in config and "equipamentos_excluidos" in config[tipo]:
+                        config[tipo]["equipamentos_excluidos"] = [str(eq).replace('.0', '') for eq in config[tipo]["equipamentos_excluidos"]]
+                
+                return config
+        else:
+            # Criar diretório config se não existir
+            config_dir = os.path.dirname(config_path)
+            if not os.path.exists(config_dir):
+                os.makedirs(config_dir)
+                
+            # Criar arquivo de configuração padrão
+            with open(config_path, 'w', encoding='utf-8') as f:
+                json.dump(config_padrao, f, indent=4, ensure_ascii=False)
+                
+            print(f"Arquivo de configuração criado em {config_path} com valores padrão.")
+            return config_padrao
+    except Exception as e:
+        print(f"Erro ao carregar configurações: {str(e)}. Usando configuração padrão.")
+        return config_padrao
+
 def processar_arquivo_base(caminho_arquivo):
     """
     Processa o arquivo TXT ou CSV e retorna o DataFrame com as transformações necessárias.
@@ -478,15 +530,16 @@ def calcular_hora_elevador(df, base_calculo):
     
     return pd.DataFrame(resultados)
 
-def calcular_motor_ocioso(base_calculo):
+def calcular_motor_ocioso(base_calculo, df_base=None):
     """
     Calcula o percentual de motor ocioso por operador.
     
     Args:
         base_calculo (DataFrame): Tabela Base Calculo
+        df_base (DataFrame, optional): DataFrame base completo para filtrar operações excluídas
     
     Returns:
-        DataFrame: Percentual de motor ocioso por operador
+        DataFrame: Percentual de motor ocioso por operador, tempo operação e tempo ocioso
     """
     # Função para calcular valores com alta precisão e depois formatar
     def calcular_porcentagem(numerador, denominador, precisao=4):
@@ -494,6 +547,20 @@ def calcular_motor_ocioso(base_calculo):
         if denominador > 0:
             return round((numerador / denominador), precisao)
         return 0.0
+    
+    # Carregar configurações para exclusões
+    config = carregar_config_calculos()
+    tipo_equipamento = "CD"  # Colhedoras
+    
+    operacoes_excluidas = []
+    tipo_calculo = "Remover do cálculo"
+    
+    if tipo_equipamento in config and "motor_ocioso" in config[tipo_equipamento]:
+        motor_ocioso_config = config[tipo_equipamento]["motor_ocioso"]
+        if "operacoes_excluidas" in motor_ocioso_config:
+            operacoes_excluidas = motor_ocioso_config["operacoes_excluidas"]
+        if "tipo_calculo" in motor_ocioso_config:
+            tipo_calculo = motor_ocioso_config["tipo_calculo"]
     
     # Agrupar por operador (já filtrado pela função calcular_base_calculo)
     operadores = base_calculo[['Operador', 'Grupo Equipamento/Frente']].drop_duplicates()
@@ -511,14 +578,33 @@ def calcular_motor_ocioso(base_calculo):
         parado_motor_sum = round(dados_op['Parado Com Motor Ligado'].sum(), 4)
         motor_ligado_sum = round(dados_op['Motor Ligado'].sum(), 4)
         
+        # Se temos o df_base e há operações a excluir, ajustar os tempos
+        if df_base is not None and operacoes_excluidas and tipo_calculo == "Remover do cálculo":
+            # Filtrar registros do operador/grupo no df_base
+            filtro_base = (df_base['Operador'] == operador) & (df_base['Grupo Equipamento/Frente'] == grupo)
+            dados_base = df_base[filtro_base]
+            
+            # Calcular tempo em operações excluídas
+            tempo_op_excluidas = round(dados_base[dados_base['Operacao'].isin(operacoes_excluidas)]['Diferença_Hora'].sum(), 4)
+            
+            # Ajustar o tempo de motor ligado (remover o tempo em operações excluídas)
+            motor_ligado_sum = max(0, motor_ligado_sum - tempo_op_excluidas)
+        
         percentual = calcular_porcentagem(parado_motor_sum, motor_ligado_sum)
         
         resultados.append({
             'Operador': operador,
-            'Porcentagem': percentual
+            'Porcentagem': percentual,
+            'Tempo Operação': motor_ligado_sum,
+            'Tempo Ocioso': parado_motor_sum
         })
     
-    return pd.DataFrame(resultados)
+    # Criar DataFrame e organizar colunas na ordem desejada
+    df_resultado = pd.DataFrame(resultados)
+    if not df_resultado.empty:
+        df_resultado = df_resultado[['Operador', 'Porcentagem', 'Tempo Operação', 'Tempo Ocioso']]
+    
+    return df_resultado
 
 def calcular_uso_gps(df, base_calculo):
     """
@@ -737,6 +823,8 @@ def criar_excel_com_planilhas(df_base, base_calculo, disp_mecanica, eficiencia_e
     disp_mecanica['Disponibilidade'] = disp_mecanica['Disponibilidade'].apply(lambda x: round(x, 4))
     eficiencia_energetica['Eficiência'] = eficiencia_energetica['Eficiência'].apply(lambda x: round(x, 4))
     hora_elevador['Horas'] = hora_elevador['Horas'].apply(lambda x: round(x, 2))
+    motor_ocioso['Tempo Operação'] = motor_ocioso['Tempo Operação'].apply(lambda x: round(x, 2))
+    motor_ocioso['Tempo Ocioso'] = motor_ocioso['Tempo Ocioso'].apply(lambda x: round(x, 2))
     motor_ocioso['Porcentagem'] = motor_ocioso['Porcentagem'].apply(lambda x: round(x, 4))
     uso_gps['Porcentagem'] = uso_gps['Porcentagem'].apply(lambda x: round(x, 4))
     
@@ -822,8 +910,17 @@ def criar_excel_com_planilhas(df_base, base_calculo, disp_mecanica, eficiencia_e
     worksheet = workbook['4_Motor Ocioso']
     ajustar_largura_colunas(worksheet)
     for row in range(2, worksheet.max_row + 1):
-        cell = worksheet.cell(row=row, column=2)  # Coluna B (Porcentagem)
-        cell.number_format = '0.00%'  # Formato de porcentagem com 2 casas
+        # Porcentagem (coluna B)
+        cell_porc = worksheet.cell(row=row, column=2)
+        cell_porc.number_format = '0.00%'  # Formato de porcentagem com 2 casas
+        
+        # Tempo Operação (coluna C)
+        cell_tempo_op = worksheet.cell(row=row, column=3)
+        cell_tempo_op.number_format = '0.00'  # Formato decimal com 2 casas
+        
+        # Tempo Ocioso (coluna D)
+        cell_tempo_oc = worksheet.cell(row=row, column=4)
+        cell_tempo_oc.number_format = '0.00'  # Formato decimal com 2 casas
     
     # Formatar planilha de Uso GPS
     worksheet = workbook['5_Uso GPS']
@@ -951,7 +1048,7 @@ def extrair_arquivo_zip(caminho_zip, pasta_destino=None):
 
 def processar_todos_arquivos():
     """
-    Processa todos os arquivos TXT, CSV ou ZIP de colhedoras nas pastas dados e dados/colhedoras.
+    Processa todos os arquivos TXT, CSV ou ZIP de colhedoras na pasta dados.
     Ignora arquivos que contenham "transbordo" no nome.
     """
     # Obter o diretório onde está o script
@@ -962,40 +1059,33 @@ def processar_todos_arquivos():
     
     # Diretórios para dados de entrada e saída
     diretorio_dados = os.path.join(diretorio_raiz, "dados")
-    diretorio_colhedoras = os.path.join(diretorio_raiz, "dados", "colhedoras")
     diretorio_saida = os.path.join(diretorio_raiz, "output")
     
     # Verificar se os diretórios existem, caso contrário criar
     if not os.path.exists(diretorio_dados):
         os.makedirs(diretorio_dados)
-    if not os.path.exists(diretorio_colhedoras):
-        os.makedirs(diretorio_colhedoras)
     if not os.path.exists(diretorio_saida):
         os.makedirs(diretorio_saida)
     
-    # Lista de diretórios para buscar arquivos
-    diretorios_busca = [diretorio_dados, diretorio_colhedoras]
-    
-    # Encontrar todos os arquivos TXT/CSV/ZIP de colhedoras em ambos os diretórios
+    # Encontrar todos os arquivos TXT/CSV/ZIP de colhedoras
     arquivos = []
     arquivos_zip = []
     
-    for diretorio in diretorios_busca:
-        # Adicionar arquivos TXT sempre
-        arquivos += glob.glob(os.path.join(diretorio, "RV Colhedora*.txt"))
-        arquivos += glob.glob(os.path.join(diretorio, "*colhedora*.txt"))
-        arquivos += glob.glob(os.path.join(diretorio, "colhedora*.txt"))
-        
-        # Adicionar arquivos CSV apenas se processCsv for True
-        if processCsv:
-            arquivos += glob.glob(os.path.join(diretorio, "RV Colhedora*.csv"))
-            arquivos += glob.glob(os.path.join(diretorio, "*colhedora*.csv"))
-            arquivos += glob.glob(os.path.join(diretorio, "colhedora*.csv"))
-        
-        # Adicionar arquivos ZIP
-        arquivos_zip += glob.glob(os.path.join(diretorio, "RV Colhedora*.zip"))
-        arquivos_zip += glob.glob(os.path.join(diretorio, "*colhedora*.zip"))
-        arquivos_zip += glob.glob(os.path.join(diretorio, "colhedora*.zip"))
+    # Adicionar arquivos TXT sempre
+    arquivos += glob.glob(os.path.join(diretorio_dados, "RV Colhedora*.txt"))
+    arquivos += glob.glob(os.path.join(diretorio_dados, "*colhedora*.txt"))
+    arquivos += glob.glob(os.path.join(diretorio_dados, "colhedora*.txt"))
+    
+    # Adicionar arquivos CSV apenas se processCsv for True
+    if processCsv:
+        arquivos += glob.glob(os.path.join(diretorio_dados, "RV Colhedora*.csv"))
+        arquivos += glob.glob(os.path.join(diretorio_dados, "*colhedora*.csv"))
+        arquivos += glob.glob(os.path.join(diretorio_dados, "colhedora*.csv"))
+    
+    # Adicionar arquivos ZIP
+    arquivos_zip += glob.glob(os.path.join(diretorio_dados, "RV Colhedora*.zip"))
+    arquivos_zip += glob.glob(os.path.join(diretorio_dados, "*colhedora*.zip"))
+    arquivos_zip += glob.glob(os.path.join(diretorio_dados, "colhedora*.zip"))
     
     # Filtrar arquivos que contenham "transbordo" no nome (case insensitive)
     arquivos = [arquivo for arquivo in arquivos if "transbordo" not in os.path.basename(arquivo).lower()]
@@ -1006,7 +1096,7 @@ def processar_todos_arquivos():
     arquivos_zip = list(set(arquivos_zip))
     
     if not arquivos and not arquivos_zip:
-        print("Nenhum arquivo de colhedoras encontrado nas pastas dados ou dados/colhedoras!")
+        print("Nenhum arquivo de colhedoras encontrado na pasta dados!")
         return
     
     print(f"Encontrados {len(arquivos)} arquivos de colhedoras (TXT/CSV) para processar.")
@@ -1059,7 +1149,7 @@ def carregar_substituicoes_operadores():
     diretorio_raiz = os.path.dirname(diretorio_script)
     
     # Caminho para o arquivo de substituição
-    arquivo_substituicao = os.path.join(diretorio_raiz, "substituiroperadores.json")
+    arquivo_substituicao = os.path.join(diretorio_raiz, "config", "substituiroperadores.json")
     
     # Verificar se o arquivo existe
     if not os.path.exists(arquivo_substituicao):
@@ -1175,7 +1265,7 @@ def processar_arquivo(caminho_arquivo, diretorio_saida):
     disp_mecanica = calcular_disponibilidade_mecanica(df_base)
     eficiencia_energetica = calcular_eficiencia_energetica(base_calculo)
     hora_elevador = calcular_hora_elevador(df_base, base_calculo)
-    motor_ocioso = calcular_motor_ocioso(base_calculo)
+    motor_ocioso = calcular_motor_ocioso(base_calculo, df_base)
     uso_gps = calcular_uso_gps(df_base, base_calculo)
     horas_por_frota = calcular_horas_por_frota(df_base)
     
