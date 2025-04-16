@@ -587,11 +587,12 @@ def calcular_eficiencia_energetica(base_calculo):
 def calcular_motor_ocioso(base_calculo, df_base=None):
     """
     Calcula o percentual de motor ocioso por operador.
+    Usa valores acumulados totais (não médias diárias) para os tempos de motor.
     
     Args:
         base_calculo (DataFrame): Tabela Base Calculo
         df_base (DataFrame, optional): DataFrame base completo para filtrar operações excluídas
-        
+    
     Returns:
         DataFrame: Percentual de motor ocioso por operador, tempo operação e tempo ocioso
     """
@@ -604,7 +605,7 @@ def calcular_motor_ocioso(base_calculo, df_base=None):
     
     # Carregar configurações para exclusões
     config = carregar_config_calculos()
-    tipo_equipamento = "TT"  # Transbordos/Tratores
+    tipo_equipamento = "TR"  # Transbordos
     
     operacoes_excluidas = []
     tipo_calculo = "Remover do cálculo"
@@ -628,9 +629,30 @@ def calcular_motor_ocioso(base_calculo, df_base=None):
         filtro = (base_calculo['Operador'] == operador) & (base_calculo['Grupo Equipamento/Frente'] == grupo)
         dados_op = base_calculo[filtro]
         
-        # Motor Ocioso = Parado com motor ligado / Motor Ligado
-        parado_motor_sum = round(dados_op['Parado com motor ligado'].sum(), 4)
-        motor_ligado_sum = round(dados_op['Motor Ligado'].sum(), 4)
+        # Para motor ocioso, usamos valores ACUMULADOS TOTAIS, não médias diárias
+        # Recuperar valores brutos da base_calculo
+        if 'Data' in dados_op.columns:
+            dias_operador = dados_op['Data'].nunique()
+            print(f"Motor ocioso para Operador: {operador} - Total de {dias_operador} dias")
+            
+            # Calcular valores acumulados
+            # Aqui vamos buscar os valores originais multiplicando pelos dias (desfazendo a média diária)
+            motor_ligado_sum = 0
+            parado_motor_sum = 0
+            
+            for _, row_op in dados_op.iterrows():
+                # Multiplicar os valores pelo número de dias deste operador para obter valores totais
+                motor_ligado_total = round(row_op['Motor Ligado'] * dias_operador, 4)
+                # Usar o nome correto da coluna conforme o restante do código
+                parado_motor_total = round(row_op['Parado com motor ligado'] * dias_operador, 4)
+                
+                motor_ligado_sum += motor_ligado_total
+                parado_motor_sum += parado_motor_total
+        else:
+            # Se não tiver coluna Data, é um único dia, usar valores como estão
+            motor_ligado_sum = round(dados_op['Motor Ligado'].sum(), 4)
+            # Usar o nome correto da coluna 
+            parado_motor_sum = round(dados_op['Parado com motor ligado'].sum(), 4)
         
         # Se temos o df_base e há operações a excluir, ajustar os tempos
         if df_base is not None and operacoes_excluidas and tipo_calculo == "Remover do cálculo":
@@ -638,7 +660,7 @@ def calcular_motor_ocioso(base_calculo, df_base=None):
             filtro_base = (df_base['Operador'] == operador) & (df_base['Grupo Equipamento/Frente'] == grupo)
             dados_base = df_base[filtro_base]
             
-            # Calcular tempo em operações excluídas
+            # Calcular tempo em operações excluídas (já é valor acumulado total)
             tempo_op_excluidas = round(dados_base[dados_base['Operacao'].isin(operacoes_excluidas)]['Diferença_Hora'].sum(), 4)
             
             # Ajustar o tempo de motor ligado (remover o tempo em operações excluídas)
