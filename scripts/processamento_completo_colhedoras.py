@@ -59,7 +59,15 @@ def carregar_config_calculos():
             "motor_ocioso": {
                 "tipo_calculo": "Remover do cálculo",
                 "operacoes_excluidas": []
-            }
+            },
+            "equipamentos_excluidos": []
+        },
+        "TR": {
+            "motor_ocioso": {
+                "tipo_calculo": "Remover do cálculo",
+                "operacoes_excluidas": []
+            },
+            "equipamentos_excluidos": []
         }
     }
     
@@ -69,15 +77,69 @@ def carregar_config_calculos():
                 config = json.load(f)
                 
                 # Garantir que os equipamentos excluídos sejam tratados como texto
-                if "CD" in config and "equipamentos_excluidos" in config["CD"]:
-                    config["CD"]["equipamentos_excluidos"] = [str(eq).replace('.0', '') for eq in config["CD"]["equipamentos_excluidos"]]
+                for tipo in ["CD", "TR"]:
+                    if tipo in config and "equipamentos_excluidos" in config[tipo]:
+                        config[tipo]["equipamentos_excluidos"] = [str(eq).replace('.0', '') for eq in config[tipo]["equipamentos_excluidos"]]
                 
                 return config
         else:
-            print(f"Arquivo de configuração não encontrado em {config_path}. Usando configuração padrão.")
+            # Criar diretório config se não existir
+            config_dir = os.path.dirname(config_path)
+            if not os.path.exists(config_dir):
+                os.makedirs(config_dir)
+                
+            # Criar arquivo de configuração padrão
+            with open(config_path, 'w', encoding='utf-8') as f:
+                json.dump(config_padrao, f, indent=4, ensure_ascii=False)
+                
+            print(f"Arquivo de configuração criado em {config_path} com valores padrão.")
             return config_padrao
     except Exception as e:
         print(f"Erro ao carregar configurações: {str(e)}. Usando configuração padrão.")
+        return config_padrao
+
+def carregar_substituicao_operadores():
+    """
+    Carrega as configurações de substituição de operadores do arquivo JSON.
+    Se o arquivo não existir, cria um novo com configuração padrão.
+    Este arquivo serve para padronizar nomes de operadores que podem 
+    aparecer com variações nos registros de entrada.
+    
+    Returns:
+        dict: Dicionário com mapeamento de substituição de operadores
+    """
+    config_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 
+                             "config", "substituicao_operadores.json")
+    
+    # Configuração padrão com alguns exemplos
+    config_padrao = {
+        "substituicoes": {
+            "JOAO SILVA": "João Silva",
+            "JOAO S.": "João Silva",
+            "MARIA SANTOS": "Maria Santos",
+            "PEDRO OLIVEIRA": "Pedro Oliveira"
+        }
+    }
+    
+    try:
+        if os.path.exists(config_path):
+            with open(config_path, 'r', encoding='utf-8') as f:
+                config = json.load(f)
+                return config
+        else:
+            # Criar diretório config se não existir
+            config_dir = os.path.dirname(config_path)
+            if not os.path.exists(config_dir):
+                os.makedirs(config_dir)
+                
+            # Criar arquivo de configuração padrão
+            with open(config_path, 'w', encoding='utf-8') as f:
+                json.dump(config_padrao, f, indent=4, ensure_ascii=False)
+                
+            print(f"Arquivo de substituição de operadores criado em {config_path} com valores de exemplo.")
+            return config_padrao
+    except Exception as e:
+        print(f"Erro ao carregar substituições de operadores: {str(e)}. Usando configuração padrão.")
         return config_padrao
 
 def processar_arquivo_base(caminho_arquivo):
@@ -163,6 +225,33 @@ def processar_arquivo_base(caminho_arquivo):
                 # Limpa e converte para número
                 df['Horas Produtivas'] = pd.to_numeric(df['Horas Produtivas'].astype(str).str.strip(), errors='coerce')
                 df['Horas Produtivas'] = df['Horas Produtivas'].fillna(0)
+            
+            # Aplicar substituição de operadores se a coluna existir
+            if 'Operador' in df.columns:
+                # Carregar configuração de substituição
+                config_substituicao = carregar_substituicao_operadores()
+                substituicoes = config_substituicao.get("substituicoes", {})
+                
+                # Garantir que a coluna de operador seja string e remover espaços extras
+                df['Operador'] = df['Operador'].astype(str).str.strip()
+                
+                # Criar um dicionário onde as chaves são versões normalizadas dos operadores originais
+                substituicoes_normalizadas = {
+                    op_original.strip().upper(): op_novo
+                    for op_original, op_novo in substituicoes.items()
+                }
+                
+                # Criar uma coluna temporária com versões normalizadas dos operadores atuais
+                df['_operador_normalizado'] = df['Operador'].str.strip().str.upper()
+                
+                # Aplicar as substituições usando a coluna normalizada
+                for operador_original, operador_novo in substituicoes_normalizadas.items():
+                    df.loc[df['_operador_normalizado'] == operador_original, 'Operador'] = operador_novo
+                
+                # Remover a coluna temporária
+                df = df.drop(columns=['_operador_normalizado'])
+                
+                print(f"Substituição de operadores aplicada. Total de mapeamentos: {len(substituicoes)}")
             
             # Limpeza e organização das colunas
             df = df.drop(columns=COLUNAS_REMOVER, errors='ignore')
@@ -474,12 +563,13 @@ def calcular_hora_elevador(df, base_calculo):
     
     return pd.DataFrame(resultados)
 
-def calcular_motor_ocioso(base_calculo):
+def calcular_motor_ocioso(base_calculo, df_base=None):
     """
     Calcula o percentual de motor ocioso por operador.
     
     Args:
         base_calculo (DataFrame): Tabela Base Calculo
+        df_base (DataFrame, optional): DataFrame base completo para filtrar operações excluídas
     
     Returns:
         DataFrame: Percentual de motor ocioso por operador, tempo operação e tempo ocioso
@@ -490,6 +580,20 @@ def calcular_motor_ocioso(base_calculo):
         if denominador > 0:
             return round((numerador / denominador), precisao)
         return 0.0
+    
+    # Carregar configurações para exclusões
+    config = carregar_config_calculos()
+    tipo_equipamento = "CD"  # Colhedoras
+    
+    operacoes_excluidas = []
+    tipo_calculo = "Remover do cálculo"
+    
+    if tipo_equipamento in config and "motor_ocioso" in config[tipo_equipamento]:
+        motor_ocioso_config = config[tipo_equipamento]["motor_ocioso"]
+        if "operacoes_excluidas" in motor_ocioso_config:
+            operacoes_excluidas = motor_ocioso_config["operacoes_excluidas"]
+        if "tipo_calculo" in motor_ocioso_config:
+            tipo_calculo = motor_ocioso_config["tipo_calculo"]
     
     # Agrupar por operador (já filtrado pela função calcular_base_calculo)
     operadores = base_calculo[['Operador', 'Grupo Equipamento/Frente']].drop_duplicates()
@@ -507,16 +611,33 @@ def calcular_motor_ocioso(base_calculo):
         parado_motor_sum = round(dados_op['Parado Com Motor Ligado'].sum(), 4)
         motor_ligado_sum = round(dados_op['Motor Ligado'].sum(), 4)
         
+        # Se temos o df_base e há operações a excluir, ajustar os tempos
+        if df_base is not None and operacoes_excluidas and tipo_calculo == "Remover do cálculo":
+            # Filtrar registros do operador/grupo no df_base
+            filtro_base = (df_base['Operador'] == operador) & (df_base['Grupo Equipamento/Frente'] == grupo)
+            dados_base = df_base[filtro_base]
+            
+            # Calcular tempo em operações excluídas
+            tempo_op_excluidas = round(dados_base[dados_base['Operacao'].isin(operacoes_excluidas)]['Diferença_Hora'].sum(), 4)
+            
+            # Ajustar o tempo de motor ligado (remover o tempo em operações excluídas)
+            motor_ligado_sum = max(0, motor_ligado_sum - tempo_op_excluidas)
+        
         percentual = calcular_porcentagem(parado_motor_sum, motor_ligado_sum)
         
         resultados.append({
             'Operador': operador,
+            'Porcentagem': percentual,
             'Tempo Operação': motor_ligado_sum,
-            'Tempo Ocioso': parado_motor_sum,
-            'Porcentagem': percentual
+            'Tempo Ocioso': parado_motor_sum
         })
     
-    return pd.DataFrame(resultados)
+    # Criar DataFrame e organizar colunas na ordem desejada
+    df_resultado = pd.DataFrame(resultados)
+    if not df_resultado.empty:
+        df_resultado = df_resultado[['Operador', 'Porcentagem', 'Tempo Operação', 'Tempo Ocioso']]
+    
+    return df_resultado
 
 def calcular_uso_gps(df, base_calculo):
     """
@@ -578,8 +699,68 @@ def calcular_uso_gps(df, base_calculo):
     
     return pd.DataFrame(resultados)
 
+def calcular_media_velocidade(df):
+    """
+    Calcula a velocidade média por operador durante períodos produtivos.
+    Considera apenas registros onde:
+    - Estado é "TRABALHANDO" ou "COLHEITA"
+    - Velocidade > 0
+    
+    Args:
+        df (DataFrame): DataFrame base processado
+    
+    Returns:
+        DataFrame: Média de velocidade por operador
+    """
+    # Carregar config para saber quais equipamentos excluir
+    config = carregar_config_calculos()
+    equipamentos_excluidos = config.get("CD", {}).get("equipamentos_excluidos", [])
+    
+    # Filtramos os dados excluindo os operadores da lista e os equipamentos excluídos
+    df = df[~df['Operador'].isin(OPERADORES_EXCLUIR)]
+    
+    # Aplicar filtro de equipamentos excluídos
+    if equipamentos_excluidos:
+        df = df[~df['Equipamento'].isin(equipamentos_excluidos)]
+    
+    # Filtrar registros produtivos com velocidade > 0
+    df_filtrado = df[
+        (df['Estado'].isin(['TRABALHANDO', 'COLHEITA'])) &
+        (df['Velocidade'] > 0)
+    ]
+    
+    # Agrupar por operador e grupo equipamento/frente
+    resultados = []
+    operadores = df_filtrado[['Operador', 'Grupo Equipamento/Frente']].drop_duplicates().dropna()
+    
+    for _, row in operadores.iterrows():
+        operador = row['Operador']
+        grupo = row['Grupo Equipamento/Frente']
+        
+        # Filtrar dados para este operador e grupo
+        filtro = (df_filtrado['Operador'] == operador) & (df_filtrado['Grupo Equipamento/Frente'] == grupo)
+        dados_op = df_filtrado[filtro]
+        
+        if len(dados_op) > 0:
+            # Calcular média ponderada pela diferença de hora
+            velocidade_total = (dados_op['Velocidade'] * dados_op['Diferença_Hora']).sum()
+            horas_total = dados_op['Diferença_Hora'].sum()
+            
+            if horas_total > 0:
+                velocidade_media = round(velocidade_total / horas_total, 2)
+            else:
+                velocidade_media = 0
+            
+            resultados.append({
+                'Operador': operador,
+                'Grupo Equipamento/Frente': grupo,
+                'Velocidade Média (km/h)': velocidade_media
+            })
+    
+    return pd.DataFrame(resultados)
+
 def criar_excel_com_planilhas(df_base, base_calculo, disp_mecanica, eficiencia_energetica, 
-                             hora_elevador, motor_ocioso, uso_gps, horas_por_frota, caminho_saida):
+                             hora_elevador, motor_ocioso, uso_gps, horas_por_frota, media_velocidade, caminho_saida):
     """
     Cria um arquivo Excel com todas as planilhas auxiliares.
     
@@ -592,6 +773,7 @@ def criar_excel_com_planilhas(df_base, base_calculo, disp_mecanica, eficiencia_e
         motor_ocioso (DataFrame): Motor ocioso
         uso_gps (DataFrame): Uso GPS
         horas_por_frota (DataFrame): Horas totais registradas por frota
+        media_velocidade (DataFrame): Média de velocidade por operador
         caminho_saida (str): Caminho do arquivo Excel de saída
     """
     # Garantir que a coluna Equipamento esteja como string sem ".0"
@@ -630,6 +812,8 @@ def criar_excel_com_planilhas(df_base, base_calculo, disp_mecanica, eficiencia_e
     uso_gps['Porcentagem'] = uso_gps['Porcentagem'].apply(lambda x: round(x, 4))
     horas_por_frota['Horas Registradas'] = horas_por_frota['Horas Registradas'].apply(lambda x: round(x, 2))
     horas_por_frota['Diferença para 24h'] = horas_por_frota['Diferença para 24h'].apply(lambda x: round(x, 2))
+    if 'Velocidade Média (km/h)' in media_velocidade.columns:
+        media_velocidade['Velocidade Média (km/h)'] = media_velocidade['Velocidade Média (km/h)'].apply(lambda x: round(x, 2))
     
     # Salvar cada DataFrame em uma planilha separada
     df_base.to_excel(writer, sheet_name='BASE', index=False)
@@ -641,6 +825,7 @@ def criar_excel_com_planilhas(df_base, base_calculo, disp_mecanica, eficiencia_e
     hora_elevador.to_excel(writer, sheet_name='3_Hora Elevador', index=False)
     motor_ocioso.to_excel(writer, sheet_name='4_Motor Ocioso', index=False)
     uso_gps.to_excel(writer, sheet_name='5_Uso GPS', index=False)
+    media_velocidade.to_excel(writer, sheet_name='6_Média Velocidade', index=False)
     horas_por_frota.to_excel(writer, sheet_name='Horas por Frota', index=False)
     
     # Aplicar formatação nas planilhas
@@ -667,23 +852,29 @@ def criar_excel_com_planilhas(df_base, base_calculo, disp_mecanica, eficiencia_e
     # Formatar planilha de Motor Ocioso
     worksheet = workbook['4_Motor Ocioso']
     for row in range(2, worksheet.max_row + 1):
-        # Tempo Operação (coluna B)
-        cell_tempo_op = worksheet.cell(row=row, column=2)
+        # Porcentagem (coluna B)
+        cell_porc = worksheet.cell(row=row, column=2)
+        cell_porc.number_format = '0.00%'  # Formato de porcentagem com 2 casas
+        
+        # Tempo Operação (coluna C)
+        cell_tempo_op = worksheet.cell(row=row, column=3)
         cell_tempo_op.number_format = '0.00'  # Formato decimal com 2 casas
         
-        # Tempo Ocioso (coluna C)
-        cell_tempo_oc = worksheet.cell(row=row, column=3)
+        # Tempo Ocioso (coluna D)
+        cell_tempo_oc = worksheet.cell(row=row, column=4)
         cell_tempo_oc.number_format = '0.00'  # Formato decimal com 2 casas
-        
-        # Porcentagem (coluna D)
-        cell_porc = worksheet.cell(row=row, column=4)
-        cell_porc.number_format = '0.00%'  # Formato de porcentagem com 2 casas
     
     # Formatar planilha de Uso GPS
     worksheet = workbook['5_Uso GPS']
     for row in range(2, worksheet.max_row + 1):
         cell = worksheet.cell(row=row, column=2)  # Coluna B (Porcentagem)
         cell.number_format = '0.00%'  # Formato de porcentagem com 2 casas
+    
+    # Formatar planilha de Média Velocidade
+    worksheet = workbook['6_Média Velocidade']
+    for row in range(2, worksheet.max_row + 1):
+        cell = worksheet.cell(row=row, column=3)  # Coluna C (Velocidade Média)
+        cell.number_format = '0.00'  # Formato decimal com 2 casas
     
     # Formatar planilha de Base Calculo
     worksheet = workbook['Base Calculo']
@@ -783,7 +974,7 @@ def extrair_arquivo_zip(caminho_zip, pasta_destino=None):
 
 def processar_todos_arquivos():
     """
-    Processa todos os arquivos TXT, CSV ou ZIP de colhedoras nas pastas dados e dados/colhedoras.
+    Processa todos os arquivos TXT, CSV ou ZIP de colhedoras na pasta dados.
     Ignora arquivos que contenham "transbordo" no nome.
     """
     # Obter o diretório onde está o script
@@ -794,40 +985,33 @@ def processar_todos_arquivos():
     
     # Diretórios para dados de entrada e saída
     diretorio_dados = os.path.join(diretorio_raiz, "dados")
-    diretorio_colhedoras = os.path.join(diretorio_raiz, "dados", "colhedoras")
     diretorio_saida = os.path.join(diretorio_raiz, "output")
     
     # Verificar se os diretórios existem, caso contrário criar
     if not os.path.exists(diretorio_dados):
         os.makedirs(diretorio_dados)
-    if not os.path.exists(diretorio_colhedoras):
-        os.makedirs(diretorio_colhedoras)
     if not os.path.exists(diretorio_saida):
         os.makedirs(diretorio_saida)
-    
-    # Lista de diretórios para buscar arquivos
-    diretorios_busca = [diretorio_dados, diretorio_colhedoras]
     
     # Encontrar todos os arquivos TXT/CSV/ZIP de colhedoras em ambos os diretórios
     arquivos = []
     arquivos_zip = []
     
-    for diretorio in diretorios_busca:
-        # Adicionar arquivos TXT sempre
-        arquivos += glob.glob(os.path.join(diretorio, "RV Colhedora*.txt"))
-        arquivos += glob.glob(os.path.join(diretorio, "*colhedora*.txt"))
-        arquivos += glob.glob(os.path.join(diretorio, "colhedora*.txt"))
-        
-        # Adicionar arquivos CSV apenas se processCsv for True
-        if processCsv:
-            arquivos += glob.glob(os.path.join(diretorio, "RV Colhedora*.csv"))
-            arquivos += glob.glob(os.path.join(diretorio, "*colhedora*.csv"))
-            arquivos += glob.glob(os.path.join(diretorio, "colhedora*.csv"))
-        
-        # Adicionar arquivos ZIP
-        arquivos_zip += glob.glob(os.path.join(diretorio, "RV Colhedora*.zip"))
-        arquivos_zip += glob.glob(os.path.join(diretorio, "*colhedora*.zip"))
-        arquivos_zip += glob.glob(os.path.join(diretorio, "colhedora*.zip"))
+    # Adicionar arquivos TXT sempre
+    arquivos += glob.glob(os.path.join(diretorio_dados, "RV Colhedora*.txt"))
+    arquivos += glob.glob(os.path.join(diretorio_dados, "*colhedora*.txt"))
+    arquivos += glob.glob(os.path.join(diretorio_dados, "colhedora*.txt"))
+    
+    # Adicionar arquivos CSV apenas se processCsv for True
+    if processCsv:
+        arquivos += glob.glob(os.path.join(diretorio_dados, "RV Colhedora*.csv"))
+        arquivos += glob.glob(os.path.join(diretorio_dados, "*colhedora*.csv"))
+        arquivos += glob.glob(os.path.join(diretorio_dados, "colhedora*.csv"))
+    
+    # Adicionar arquivos ZIP
+    arquivos_zip += glob.glob(os.path.join(diretorio_dados, "RV Colhedora*.zip"))
+    arquivos_zip += glob.glob(os.path.join(diretorio_dados, "*colhedora*.zip"))
+    arquivos_zip += glob.glob(os.path.join(diretorio_dados, "colhedora*.zip"))
     
     # Filtrar arquivos que contenham "transbordo" no nome (case insensitive)
     arquivos = [arquivo for arquivo in arquivos if "transbordo" not in os.path.basename(arquivo).lower()]
@@ -838,7 +1022,7 @@ def processar_todos_arquivos():
     arquivos_zip = list(set(arquivos_zip))
     
     if not arquivos and not arquivos_zip:
-        print("Nenhum arquivo de colhedoras encontrado nas pastas dados ou dados/colhedoras!")
+        print("Nenhum arquivo de colhedoras encontrado na pasta dados!")
         return
     
     print(f"Encontrados {len(arquivos)} arquivos de colhedoras (TXT/CSV) para processar.")
@@ -913,14 +1097,15 @@ def processar_arquivo(caminho_arquivo, diretorio_saida):
     disp_mecanica = calcular_disponibilidade_mecanica(df_base)
     eficiencia_energetica = calcular_eficiencia_energetica(base_calculo)
     hora_elevador = calcular_hora_elevador(df_base, base_calculo)
-    motor_ocioso = calcular_motor_ocioso(base_calculo)
+    motor_ocioso = calcular_motor_ocioso(base_calculo, df_base)
     uso_gps = calcular_uso_gps(df_base, base_calculo)
     horas_por_frota = calcular_horas_por_frota(df_base)
+    media_velocidade = calcular_media_velocidade(df_base)
     
     # Criar o arquivo Excel com todas as planilhas
     criar_excel_com_planilhas(
         df_base, base_calculo, disp_mecanica, eficiencia_energetica,
-        hora_elevador, motor_ocioso, uso_gps, horas_por_frota, arquivo_saida
+        hora_elevador, motor_ocioso, uso_gps, horas_por_frota, media_velocidade, arquivo_saida
     )
     
     print(f"Arquivo {arquivo_saida} gerado com sucesso!")
