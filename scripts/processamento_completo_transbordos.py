@@ -633,7 +633,7 @@ def calcular_motor_ocioso(df):
     Returns:
         DataFrame: DataFrame com as colunas:
             - Operador
-            - % Ocioso (porcentagem do tempo ocioso em relação ao tempo ligado)
+            - Porcentagem (porcentagem do tempo ocioso em relação ao tempo ligado)
             - Tempo Ligado (horas com motor ligado)
             - Tempo Ocioso (horas parado com motor ligado)
     """
@@ -670,11 +670,11 @@ def calcular_motor_ocioso(df):
         print(f"\nOperador: {operador}")
         print(f"Tempo Ligado: {tempo_ligado:.6f}")
         print(f"Tempo Ocioso: {tempo_ocioso:.6f}")
-        print(f"% Ocioso: {percent_ocioso:.6f}")
+        print(f"Porcentagem: {percent_ocioso:.6f}")
         
         resultados.append({
             'Operador': operador,
-            '% Ocioso': percent_ocioso,
+            'Porcentagem': percent_ocioso,
             'Tempo Ligado': tempo_ligado,
             'Tempo Ocioso': tempo_ocioso
         })
