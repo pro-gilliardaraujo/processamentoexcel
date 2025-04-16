@@ -185,8 +185,15 @@ def processar_arquivo_base(caminho_arquivo):
                     # Aplicar o mapeamento
                     df[col] = df[col].map(MAPEAMENTO_BOOLEANO).fillna(0).astype(int)
             
-            # Criar coluna Parado com motor ligado
-            df['Parado com motor ligado'] = (df['Velocidade'] == 0) & (df['Motor Ligado'] == 1)
+            # Verificar se a coluna "Parada com Motor Ligado" já existe
+            if 'Parada com Motor Ligado' in df.columns:
+                # Converter para string primeiro para garantir consistência
+                df['Parada com Motor Ligado'] = df['Parada com Motor Ligado'].astype(str).str.upper()
+                # Aplicar o mapeamento
+                df['Parada com Motor Ligado'] = df['Parada com Motor Ligado'].map(MAPEAMENTO_BOOLEANO).fillna(0).astype(int)
+            else:
+                # Criar coluna Parada com Motor Ligado
+                df['Parada com Motor Ligado'] = ((df['Velocidade'] == 0) & (df['Motor Ligado'] == 1)).astype(int)
             
             # Verifica se Horas Produtivas já existe
             if 'Horas Produtivas' not in df.columns or df['Horas Produtivas'].isna().any():
