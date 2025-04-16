@@ -649,14 +649,14 @@ def calcular_motor_ocioso(base_calculo, df_base=None):
         resultados.append({
             'Operador': operador,
             'Porcentagem': percentual,
-            'Tempo Operação': motor_ligado_sum,
+            'Tempo Ligado': motor_ligado_sum,
             'Tempo Ocioso': parado_motor_sum
         })
     
     # Criar DataFrame e organizar colunas na ordem desejada
     df_resultado = pd.DataFrame(resultados)
     if not df_resultado.empty:
-        df_resultado = df_resultado[['Operador', 'Porcentagem', 'Tempo Operação', 'Tempo Ocioso']]
+        df_resultado = df_resultado[['Operador', 'Porcentagem', 'Tempo Ligado', 'Tempo Ocioso']]
     
     return df_resultado
 
@@ -975,9 +975,9 @@ def criar_excel_com_planilhas(df_base, base_calculo, disp_mecanica, eficiencia_e
         cell_porc = worksheet.cell(row=row, column=2)
         cell_porc.number_format = '0.00%'  # Formato de porcentagem com 2 casas
         
-        # Tempo Operação (coluna C)
-        cell_tempo_op = worksheet.cell(row=row, column=3)
-        cell_tempo_op.number_format = '0.00'  # Formato decimal com 2 casas
+        # Tempo Ligado (coluna C)
+        cell_tempo_ligado = worksheet.cell(row=row, column=3)
+        cell_tempo_ligado.number_format = '0.00'  # Formato decimal com 2 casas
         
         # Tempo Ocioso (coluna D)
         cell_tempo_oc = worksheet.cell(row=row, column=4)
