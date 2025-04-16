@@ -296,10 +296,12 @@ def calcular_base_calculo(df):
         # Percentual horas elevador (em decimal 0-1)
         percent_elevador = calcular_porcentagem(horas_elevador, horas_totais)
         
-        # RTK - soma de Diferença_Hora onde RTK = 1 E Field Cruiser = 1
+        # RTK - soma de Diferença_Hora onde todas as condições são atendidas
         rtk = dados_filtrados[
-            (dados_filtrados['RTK (Piloto Automatico)'] == 1) & 
-            (dados_filtrados['Field Cruiser'] == 1)
+            (dados_filtrados['Operacao'] == '7290 - COLHEITA CANA MECANIZADA') &
+            (dados_filtrados['Pressao de Corte'] > 300) &
+            (dados_filtrados['RTK (Piloto Automatico)'] == 1) &
+            (dados_filtrados['Esteira Ligada'] == 1)
         ]['Diferença_Hora'].sum()
         if dias_operador > 1:
             rtk = rtk / dias_operador
