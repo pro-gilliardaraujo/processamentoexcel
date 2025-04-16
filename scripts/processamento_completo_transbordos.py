@@ -325,7 +325,7 @@ def calcular_base_calculo(df):
     - Horas totais: soma de Diferença_Hora
     - Motor Ligado: soma de Diferença_Hora onde Motor Ligado = 1
     - Parado com motor ligado: soma de Diferença_Hora onde Motor Ligado = 1 E Velocidade = 0
-    - GPS: soma de Diferença_Hora onde RTK = 1 E Field Cruiser = 1
+    - GPS: soma de Diferença_Hora onde RTK = 1
     
     Args:
         df (DataFrame): DataFrame processado
@@ -392,10 +392,9 @@ def calcular_base_calculo(df):
         # % Parado com motor ligado (em decimal 0-1)
         percent_parado_motor = calcular_porcentagem(parado_motor_ligado, motor_ligado)
         
-        # GPS - soma de Diferença_Hora onde RTK = 1 E Field Cruiser = 1
+        # GPS - soma de Diferença_Hora onde RTK = 1
         gps = dados_filtrados[
-            (dados_filtrados['RTK (Piloto Automatico)'] == 1) & 
-            (dados_filtrados['Field Cruiser'] == 1)
+            dados_filtrados['RTK (Piloto Automatico)'] == 1
         ]['Diferença_Hora'].sum()
         if dias_operador > 1:
             gps = gps / dias_operador
