@@ -29,7 +29,9 @@ COLUNAS_REMOVER = [
     'Regional',
     'Tipo de Equipamento',
     'Unidade',
-    'Centro de Custo'
+    'Centro de Custo',
+    'Trabalhando em File',
+    'Trabalhando Frente Dividida'
 ]
 
 COLUNAS_DESEJADAS = [
