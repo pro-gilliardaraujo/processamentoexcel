@@ -150,26 +150,15 @@ def processar_arquivo_base(caminho_arquivo):
             # Conversão de Hora para datetime
             df['Hora'] = pd.to_datetime(df['Hora'], format='%H:%M:%S', errors='coerce')
             
-            # IMPORTANTE: Usar a mesma lógica do Codigo_Base_C.py para cálculo da Diferença_Hora
-            # Primeiro ordenar os dados para garantir que o diff() funcione corretamente
-            df = df.sort_values(by=['Equipamento', 'Data', 'Hora'])
+            # IMPORTANTE: Calcular a Diferença_Hora mantendo a ordem original dos registros
+            # Não reordenar os dados para preservar a sequência original
+            df['Diferença_Hora'] = df['Hora'].diff().dt.total_seconds() / 3600
+            # Aplicar regras para a Diferença_Hora
+            df['Diferença_Hora'] = df['Diferença_Hora'].apply(lambda x: max(x, 0))
+            # Nova regra: se Diferença_Hora > 0.50, então 0
+            df['Diferença_Hora'] = df['Diferença_Hora'].apply(lambda x: 0 if x > 0.50 else x)
             
-            # Calcular a diferença de hora usando a lógica do Codigo_Base_C.py
-            # Realizar o cálculo para cada equipamento separadamente
-            equipamentos = df['Equipamento'].unique()
-            df['Diferença_Hora'] = 0.0
-            
-            for equipamento in equipamentos:
-                # Filtrar dados deste equipamento
-                mask = df['Equipamento'] == equipamento
-                # Calcular diferenças usando diff() como no Codigo_Base_C.py
-                df.loc[mask, 'Diferença_Hora'] = df.loc[mask, 'Hora'].diff().dt.total_seconds() / 3600
-                # Aplicar regras exatamente como no Codigo_Base_C.py
-                df.loc[mask, 'Diferença_Hora'] = df.loc[mask, 'Diferença_Hora'].apply(lambda x: max(x, 0))
-                # Nova regra: se Diferença_Hora > 0.50, então 0
-                df.loc[mask, 'Diferença_Hora'] = df.loc[mask, 'Diferença_Hora'].apply(lambda x: 0 if x > 0.50 else x)
-            
-            print(f"Diferença_Hora calculada usando lógica do Codigo_Base_C.py. Soma total: {df['Diferença_Hora'].sum():.2f} horas")
+            print(f"Diferença_Hora calculada mantendo a ordem original dos registros. Soma total: {df['Diferença_Hora'].sum():.2f} horas")
             
             # Cálculos adicionais
             RPM_MINIMO = 300  # Definindo constante para RPM mínimo
