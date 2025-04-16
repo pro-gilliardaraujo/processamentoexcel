@@ -223,6 +223,18 @@ def processar_arquivo_base(caminho_arquivo):
             # Limpeza de espaços extras nos nomes das colunas
             df.columns = df.columns.str.strip()
             
+            # Padronizar valores da coluna Grupo Operacao
+            if 'Grupo Operacao' in df.columns:
+                df['Grupo Operacao'] = df['Grupo Operacao'].str.strip()
+                # Mapear valores para garantir consistência
+                mapa_grupo_operacao = {
+                    'SEM APONTAMENTO': 'Sem Apontamento',
+                    'PRODUTIVA': 'Produtiva',
+                    'MANUTENCAO': 'Manutenção',
+                    'MANUTENÇÃO': 'Manutenção'
+                }
+                df['Grupo Operacao'] = df['Grupo Operacao'].replace(mapa_grupo_operacao)
+            
             # Verificar se 'Data/Hora' existe, caso ainda não tenha sido separado
             if 'Data/Hora' in df.columns:
                 df[['Data', 'Hora']] = df['Data/Hora'].str.split(' ', expand=True)
