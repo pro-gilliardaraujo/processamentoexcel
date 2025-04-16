@@ -46,6 +46,15 @@ COLUNAS_DESEJADAS = [
 # Valores a serem filtrados
 OPERADORES_EXCLUIR = ["9999 - TROCA DE TURNO"]
 
+# Mapeamento de valores booleanos para 1/0
+MAPEAMENTO_BOOLEANO = {
+    'VERDADEIRO': 1, 'FALSO': 0,
+    'TRUE': 1, 'FALSE': 0,
+    'LIGADO': 1, 'DESLIGADO': 0,
+    True: 1, False: 0,
+    1: 1, 0: 0
+}
+
 def carregar_config_calculos():
     """
     Carrega as configurações de cálculos do arquivo JSON.
@@ -165,13 +174,19 @@ def processar_arquivo_base(caminho_arquivo):
             # Cálculos adicionais
             RPM_MINIMO = 300  # Definindo constante para RPM mínimo
             
-            # Garantir que Motor Ligado seja numérico (1) ou texto ('LIGADO')
-            if 'Motor Ligado' in df.columns:
-                df['Motor Ligado'] = df['Motor Ligado'].replace({'LIGADO': 1, 'DESLIGADO': 0})
-                df['Motor Ligado'] = pd.to_numeric(df['Motor Ligado'], errors='coerce').fillna(0).astype(int)
+            # Converter valores booleanos para 1/0
+            colunas_booleanas = ['Motor Ligado', 'Esteira Ligada', 'Field Cruiser', 
+                               'RTK (Piloto Automatico)', 'Implemento Ligado']
+            
+            for col in colunas_booleanas:
+                if col in df.columns:
+                    # Converter para string primeiro para garantir consistência
+                    df[col] = df[col].astype(str).str.upper()
+                    # Aplicar o mapeamento
+                    df[col] = df[col].map(MAPEAMENTO_BOOLEANO).fillna(0).astype(int)
             
             # Criar coluna Parado com motor ligado
-            df['Parado com motor ligado'] = (df['Velocidade'] == 0) & ((df['Motor Ligado'] == 1) | (df['Motor Ligado'] == 'LIGADO'))
+            df['Parado com motor ligado'] = (df['Velocidade'] == 0) & (df['Motor Ligado'] == 1)
             
             # Verifica se Horas Produtivas já existe
             if 'Horas Produtivas' not in df.columns or df['Horas Produtivas'].isna().any():
@@ -184,14 +199,6 @@ def processar_arquivo_base(caminho_arquivo):
                 # Limpa e converte para número
                 df['Horas Produtivas'] = pd.to_numeric(df['Horas Produtivas'].astype(str).str.strip(), errors='coerce')
                 df['Horas Produtivas'] = df['Horas Produtivas'].fillna(0)
-            
-            # Conversão de colunas binárias para valores numéricos (garantindo que sejam números)
-            for col in ['Esteira Ligada', 'Field Cruiser', 'RTK (Piloto Automatico)', 'Implemento Ligado']:
-                if col in df.columns:
-                    # Se a coluna for texto (LIGADO/DESLIGADO), converter para 1/0
-                    if df[col].dtype == 'object':
-                        df[col] = df[col].replace({'LIGADO': 1, 'DESLIGADO': 0})
-                    df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0).astype(int)
             
             # Limpeza e organização das colunas
             df = df.drop(columns=COLUNAS_REMOVER, errors='ignore')
