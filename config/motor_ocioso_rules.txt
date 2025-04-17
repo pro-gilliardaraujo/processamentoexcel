@@ -1,0 +1,55 @@
+REGRAS PARA CÁLCULO DE MOTOR OCIOSO
+
+1. REGRA PRINCIPAL
+- O intervalo é fechado quando encontramos uma "Parada com Motor Ligado = 0" com tempo maior que 1 minuto
+
+2. REGRAS PARA SOMA
+- Quando temos uma sequência de "Parada com Motor Ligado = 1" com "Parada com Motor Ligado = 0" menor que 1 minuto entre elas, somamos os tempos
+- Se a soma total for maior que 1 minuto, subtraímos 1 minuto do resultado
+- Se a soma total for menor que 1 minuto, desconsideramos o intervalo
+
+3. REGRAS PARA INTERVALOS
+- Um novo intervalo começa quando encontramos uma "Parada com Motor Ligado = 1"
+- O intervalo continua enquanto as "Parada com Motor Ligado = 0" entre elas forem menores que 1 minuto
+- O intervalo é fechado quando encontramos uma "Parada com Motor Ligado = 0" maior que 1 minuto
+
+PSEUDOCÓDIGO
+
+iniciar_intervalo = false
+tempo_soma = 0
+tempo_total = 0
+
+para cada linha no arquivo:
+    se linha.parada_motor_ligado == 1:
+        se não iniciar_intervalo:
+            iniciar_intervalo = true
+            tempo_soma = linha.tempo
+        senão:
+            tempo_soma += linha.tempo
+    
+    senão se linha.parada_motor_ligado == 0:
+        se iniciar_intervalo:
+            se linha.tempo > 1 minuto:
+                se tempo_soma > 1 minuto:
+                    tempo_total += (tempo_soma - 1 minuto)
+                iniciar_intervalo = false
+                tempo_soma = 0
+            senão:
+                continuar somando (não fecha o intervalo)
+
+ao final:
+    se iniciar_intervalo e tempo_soma > 1 minuto:
+        tempo_total += (tempo_soma - 1 minuto)
+
+EXEMPLO PRÁTICO
+
+Sequência: 
+Parada com Motor Ligado = 1 (3:20) -> 
+Parada com Motor Ligado = 0 (10s) -> 
+Parada com Motor Ligado = 1 (1s) -> 
+Parada com Motor Ligado = 0 (2:50)
+
+Resultado:
+1. Soma = 3:20 + 1s = 3:21
+2. Subtrai 1 minuto = 2:21
+3. Fecha intervalo porque encontrou Parada com Motor Ligado = 0 com 2:50 (> 1 minuto) 

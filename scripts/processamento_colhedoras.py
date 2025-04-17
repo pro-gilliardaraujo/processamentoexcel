@@ -479,6 +479,14 @@ def calcular_motor_ocioso(base_calculo, df_base):
     Calcula o percentual de motor ocioso por operador usando os dados da Base Calculo.
     Agrega os dados por operador, calculando a média quando um operador aparece em múltiplas frotas.
     
+    Regras de cálculo:
+    1. Existe uma tolerância de 1 minuto para operações de "Parada com motor ligado" (valor 1)
+    2. Se uma operação tem "Parada com motor ligado = 1" e dura menos de 1 minuto, ela é desconsiderada se:
+       - A próxima operação tem "Parada com motor ligado = 0" e dura mais de 1 minuto
+    3. Se existem duas ou mais operações com "Parada com motor ligado = 1" em sequência (ou com outras operações entre elas que duram menos de 1 minuto):
+       - Somamos o tempo total dessas operações
+       - Subtraímos 1 minuto do total
+    
     Args:
         base_calculo (DataFrame): Tabela Base Calculo
         df_base (DataFrame): DataFrame base para aplicar filtros de operações
@@ -511,11 +519,55 @@ def calcular_motor_ocioso(base_calculo, df_base):
         # Filtrar dados do operador
         dados_operador = df_filtrado[df_filtrado['Operador'] == operador]
         
+        # Ordenar por Data e Hora para garantir sequência temporal
+        if 'Data' in dados_operador.columns and 'Hora' in dados_operador.columns:
+            dados_operador = dados_operador.sort_values(by=['Data', 'Hora'])
+        
         # Calcular tempo total com motor ligado
         tempo_ligado = dados_operador[dados_operador['Motor Ligado'] == 1]['Diferença_Hora'].sum()
         
-        # Calcular tempo ocioso (parado com motor ligado)
-        tempo_ocioso = dados_operador[dados_operador['Parada com Motor Ligado'] == 1]['Diferença_Hora'].sum()
+        # Calcular tempo ocioso com a nova lógica de tolerância
+        tempo_ocioso = 0
+        i = 0
+        while i < len(dados_operador):
+            # Verificar se é uma parada com motor ligado
+            if dados_operador.iloc[i]['Parada com Motor Ligado'] == 1:
+                # Iniciar uma sequência de paradas
+                tempo_sequencia = dados_operador.iloc[i]['Diferença_Hora']
+                ultima_parada = i
+                
+                # Avançar até encontrar o fim da sequência
+                j = i + 1
+                sequencia_continua = True
+                while j < len(dados_operador) and sequencia_continua:
+                    # Se encontrou uma operação não ociosa
+                    if dados_operador.iloc[j]['Parada com Motor Ligado'] == 0:
+                        # Verificar se a operação não ociosa dura mais de 1 minuto
+                        if dados_operador.iloc[j]['Diferença_Hora'] > 1/60:  # 1 minuto em horas
+                            # Se a sequência anterior durou menos de 1 minuto, desconsiderar
+                            if tempo_sequencia < 1/60:
+                                tempo_sequencia = 0
+                            sequencia_continua = False
+                        else:
+                            # Operação não ociosa com menos de 1 minuto, continuar a sequência
+                            tempo_sequencia += dados_operador.iloc[j]['Diferença_Hora']
+                    else:
+                        # Outra operação ociosa, continuar a sequência
+                        tempo_sequencia += dados_operador.iloc[j]['Diferença_Hora']
+                        ultima_parada = j
+                    
+                    j += 1
+                
+                # Se a sequência durou mais de 1 minuto, adicionar ao tempo ocioso
+                if tempo_sequencia >= 1/60:
+                    # Subtrair 1 minuto da sequência (se houver mais de 1 minuto)
+                    tempo_sequencia = max(0, tempo_sequencia - 1/60)
+                    tempo_ocioso += tempo_sequencia
+                
+                # Avançar para depois da última parada da sequência
+                i = ultima_parada + 1
+            else:
+                i += 1
         
         # Calcular porcentagem de tempo ocioso
         porcentagem = tempo_ocioso / tempo_ligado if tempo_ligado > 0 else 0
