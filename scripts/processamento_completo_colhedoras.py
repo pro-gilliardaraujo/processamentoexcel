@@ -638,17 +638,21 @@ def calcular_media_velocidade(df):
     
     df_velocidade = df_filtrado[registros_validos]
     
-    # Verificar se há dados para processar
-    if len(df_velocidade) == 0:
-        return pd.DataFrame(columns=['Operador', 'Velocidade'])
-    
-    # Determinar os dias efetivos para cada operador para cálculo de médias
-    operadores = df_velocidade['Operador'].unique()
+    # Obter lista de operadores únicos do DataFrame original
+    operadores = df_filtrado['Operador'].unique()
     resultados = []
     
     for operador in operadores:
         # Filtrar dados para este operador
         dados_op = df_velocidade[df_velocidade['Operador'] == operador]
+        
+        # Se não houver dados válidos para este operador, adicionar com velocidade zero
+        if len(dados_op) == 0:
+            resultados.append({
+                'Operador': operador,
+                'Velocidade': 0
+            })
+            continue
         
         # Calcular a média de velocidade (ponderada pelo tempo, se houver a coluna Diferença_Hora)
         if 'Diferença_Hora' in dados_op.columns:
@@ -728,25 +732,25 @@ def identificar_operadores_duplicados(df):
     print(f"Encontrados {len(duplicidades)} operadores com IDs duplicadas.")
     return mapeamento, pd.DataFrame(duplicidades)
 
-def criar_excel_com_planilhas(df_base, base_calculo, disp_mecanica, eficiencia_energetica, 
-                             hora_elevador, motor_ocioso, uso_gps, horas_por_frota, caminho_saida,
-                             df_duplicados=None, media_velocidade=None, df_substituicoes=None):
+def criar_excel_com_planilhas(df_base, base_calculo, disp_mecanica, eficiencia_energetica,
+                            hora_elevador, motor_ocioso, uso_gps, horas_por_frota, caminho_saida,
+                            df_duplicados=None, media_velocidade=None, df_substituicoes=None):
     """
-    Cria um arquivo Excel com todas as planilhas auxiliares.
+    Cria um arquivo Excel com todas as planilhas necessárias.
     
     Args:
-        df_base (DataFrame): DataFrame base processado
-        base_calculo (DataFrame): Tabela Base Calculo
-        disp_mecanica (DataFrame): Disponibilidade mecânica
-        eficiencia_energetica (DataFrame): Eficiência energética
-        hora_elevador (DataFrame): Horas de elevador
-        motor_ocioso (DataFrame): Motor ocioso
-        uso_gps (DataFrame): Uso GPS
-        horas_por_frota (DataFrame): Horas totais registradas por frota
-        caminho_saida (str): Caminho do arquivo Excel de saída
-        df_duplicados (DataFrame, optional): Tabela de IDs duplicadas
-        media_velocidade (DataFrame, optional): Média de velocidade por operador
-        df_substituicoes (DataFrame, optional): Tabela de IDs substituídas
+        df_base (DataFrame): DataFrame com os dados base
+        base_calculo (DataFrame): DataFrame com a base de cálculo
+        disp_mecanica (DataFrame): DataFrame com disponibilidade mecânica
+        eficiencia_energetica (DataFrame): DataFrame com eficiência energética
+        hora_elevador (DataFrame): DataFrame com hora do elevador
+        motor_ocioso (DataFrame): DataFrame com motor ocioso
+        uso_gps (DataFrame): DataFrame com uso do GPS
+        horas_por_frota (DataFrame): DataFrame com horas por frota
+        caminho_saida (str): Caminho onde o arquivo Excel será salvo
+        df_duplicados (DataFrame, optional): DataFrame com IDs duplicadas
+        media_velocidade (DataFrame, optional): DataFrame com média de velocidade
+        df_substituicoes (DataFrame, optional): DataFrame com IDs substituídas
     """
     # Definir função de ajuste de largura de colunas
     def ajustar_largura_colunas(worksheet):
@@ -773,31 +777,8 @@ def criar_excel_com_planilhas(df_base, base_calculo, disp_mecanica, eficiencia_e
             # Definir a largura da coluna
             worksheet.column_dimensions[column].width = max_length
     
+    # Criar o arquivo Excel
     writer = pd.ExcelWriter(caminho_saida, engine='openpyxl')
-    
-    # Arredondamento fixo para 2 casas decimais em todas as colunas numéricas antes de exportar
-    # Base Calculo - garantir que todas as colunas numéricas tenham 2 casas decimais
-    colunas_numericas = ['Horas totais', 'Horas elevador', '%', 'RTK', 'Horas Produtivas', 
-                         '% Utilização RTK', 'Motor Ligado', '% Eficiência Elevador', 
-                         'Parado Com Motor Ligado', '% Parado com motor ligado']
-    
-    for col in colunas_numericas:
-        if col in base_calculo.columns:
-            base_calculo[col] = base_calculo[col].apply(lambda x: round(x, 2))
-    
-    # Arredondar valores nas outras planilhas
-    disp_mecanica['Disponibilidade'] = disp_mecanica['Disponibilidade'].apply(lambda x: round(x, 4))
-    eficiencia_energetica['Eficiência'] = eficiencia_energetica['Eficiência'].apply(lambda x: round(x, 4))
-    hora_elevador['Horas'] = hora_elevador['Horas'].apply(lambda x: round(x, 2))
-    
-    # Motor Ocioso - Manter precisão completa
-    # Removido o arredondamento dos valores de motor_ocioso
-    
-    uso_gps['Porcentagem'] = uso_gps['Porcentagem'].apply(lambda x: round(x, 4))
-    
-    # Arredondar apenas as colunas originais em horas_por_frota (mantendo as novas colunas intactas)
-    horas_por_frota['Horas Registradas'] = horas_por_frota['Horas Registradas'].apply(lambda x: round(x, 2))
-    horas_por_frota['Diferença para 24h'] = horas_por_frota['Diferença para 24h'].apply(lambda x: round(x, 2))
     
     # Salvar cada DataFrame em uma planilha separada
     df_base.to_excel(writer, sheet_name='BASE', index=False)
@@ -811,9 +792,10 @@ def criar_excel_com_planilhas(df_base, base_calculo, disp_mecanica, eficiencia_e
     uso_gps.to_excel(writer, sheet_name='5_Uso GPS', index=False)
     horas_por_frota.to_excel(writer, sheet_name='Horas por Frota', index=False)
     
-    # Adicionar planilha de Média Velocidade, se existir
-    if media_velocidade is not None and not media_velocidade.empty:
-        media_velocidade.to_excel(writer, sheet_name='Média Velocidade', index=False)
+    # Adicionar planilha de Média Velocidade (sempre)
+    if media_velocidade is None:
+        media_velocidade = pd.DataFrame(columns=['Operador', 'Velocidade'])
+    media_velocidade.to_excel(writer, sheet_name='Média Velocidade', index=False)
     
     # Adicionar planilha de IDs duplicadas, se existir
     if df_duplicados is not None and not df_duplicados.empty:
@@ -830,111 +812,12 @@ def criar_excel_com_planilhas(df_base, base_calculo, disp_mecanica, eficiencia_e
     # Aplicar formatação nas planilhas
     workbook = writer.book
     
-    # Formatar planilha de Disponibilidade Mecânica
-    worksheet = workbook['1_Disponibilidade Mecânica']
-    ajustar_largura_colunas(worksheet)
-    for row in range(2, worksheet.max_row + 1):  # Começando da linha 2 (ignorando cabeçalho)
-        cell = worksheet.cell(row=row, column=2)  # Coluna B (Disponibilidade)
-        cell.number_format = '0.00%'  # Formato de porcentagem com 2 casas
-    
-    # Formatar planilha de Eficiência Energética
-    worksheet = workbook['2_Eficiência Energética']
+    # Formatar planilha de Média Velocidade (sempre)
+    worksheet = workbook['Média Velocidade']
     ajustar_largura_colunas(worksheet)
     for row in range(2, worksheet.max_row + 1):
-        cell = worksheet.cell(row=row, column=2)  # Coluna B (Eficiência)
-        cell.number_format = '0.00%'  # Formato de porcentagem com 2 casas
-    
-    # Formatar planilha de Hora Elevador
-    worksheet = workbook['3_Hora Elevador']
-    ajustar_largura_colunas(worksheet)
-    for row in range(2, worksheet.max_row + 1):
-        cell = worksheet.cell(row=row, column=2)  # Coluna B (Horas)
-        cell.number_format = '0.00'  # Formato decimal com 2 casas
-    
-    # Formatar planilha de Motor Ocioso
-    worksheet = workbook['4_Motor Ocioso']
-    ajustar_largura_colunas(worksheet)
-    for row in range(2, worksheet.max_row + 1):
-        # Porcentagem (coluna B)
-        cell_porc = worksheet.cell(row=row, column=2)
-        cell_porc.number_format = '0.000000'  # 6 casas decimais
-        
-        # Tempo Ligado (coluna C)
-        cell_tempo_ligado = worksheet.cell(row=row, column=3)
-        cell_tempo_ligado.number_format = '0.000000'  # 6 casas decimais
-        
-        # Tempo Ocioso (coluna D)
-        cell_tempo_oc = worksheet.cell(row=row, column=4)
-        cell_tempo_oc.number_format = '0.000000'  # 6 casas decimais
-        
-        # Não arredondar os valores, usar os números exatos
-        tempo_ligado = float(cell_tempo_ligado.value) if cell_tempo_ligado.value else 0
-        tempo_ocioso = float(cell_tempo_oc.value) if cell_tempo_oc.value else 0
-        
-        # Recalcular a porcentagem usando os valores exatos
-        if tempo_ligado > 0:
-            porcentagem = tempo_ocioso / tempo_ligado
-            # Atualizar o valor da célula com o cálculo exato
-            cell_porc.value = porcentagem
-            
-            print(f"\nLinha {row} na planilha Motor Ocioso:")
-            print(f"Tempo Ocioso (exato): {tempo_ocioso}")
-            print(f"Tempo Ligado (exato): {tempo_ligado}")
-            print(f"Porcentagem (exata): {porcentagem}")
-            
-            # Verificar se o valor na célula está correto
-            if abs(float(cell_porc.value) - porcentagem) > 0.000001:
-                print(f"AVISO: Diferença detectada!")
-                print(f"Valor na célula: {float(cell_porc.value)}")
-                print(f"Valor calculado: {porcentagem}")
-    
-    # Formatar planilha de Uso GPS
-    worksheet = workbook['5_Uso GPS']
-    ajustar_largura_colunas(worksheet)
-    for row in range(2, worksheet.max_row + 1):
-        cell = worksheet.cell(row=row, column=2)  # Coluna B (Porcentagem)
-        cell.number_format = '0.00%'  # Formato de porcentagem com 2 casas
-    
-    # Formatar planilha de Média Velocidade
-    if media_velocidade is not None and not media_velocidade.empty:
-        worksheet = workbook['Média Velocidade']
-        ajustar_largura_colunas(worksheet)
-        for row in range(2, worksheet.max_row + 1):
-            cell = worksheet.cell(row=row, column=2)  # Coluna B (Velocidade)
-            cell.number_format = '0.00'  # Formato decimal normal com 2 casas
-    
-    # Formatar planilha de Base Calculo
-    worksheet = workbook['Base Calculo']
-    ajustar_largura_colunas(worksheet)
-    for row in range(2, worksheet.max_row + 1):
-        # Formatar colunas decimais
-        columns_decimal = [4, 5, 7, 8, 10, 12]  # Colunas D, E, G, H, J, L (Horas totais, Horas elevador, etc.)
-        for col in columns_decimal:
-            if col <= worksheet.max_column:
-                cell = worksheet.cell(row=row, column=col)
-                cell.number_format = '0.00'  # Formato decimal com 2 casas
-        
-        # Formatar colunas de porcentagem
-        columns_percent = [6, 9, 11, 13]  # Colunas F, I, K, M (%, % Utilização RTK, etc.)
-        for col in columns_percent:
-            if col <= worksheet.max_column:
-                cell = worksheet.cell(row=row, column=col)
-                cell.number_format = '0.00%'  # Formato de porcentagem com 2 casas
-    
-    # Formatar planilha de Horas por Frota
-    worksheet = workbook['Horas por Frota']
-    ajustar_largura_colunas(worksheet)
-    
-    # Identificar colunas específicas por nome para garantir compatibilidade
-    for row in range(2, worksheet.max_row + 1):
-        # Formatar todas as colunas como decimais
-        for col in range(2, worksheet.max_column + 1):
-            cell = worksheet.cell(row=row, column=col)
-            cell.number_format = '0.00'  # Formato decimal com 2 casas
-    
-    # Ajustar a planilha BASE (apenas largura das colunas)
-    worksheet = workbook['BASE']
-    ajustar_largura_colunas(worksheet)
+        cell = worksheet.cell(row=row, column=2)  # Coluna B (Velocidade)
+        cell.number_format = '0.00'  # Formato decimal normal com 2 casas
     
     writer.close()
     print(f"Arquivo Excel salvo com sucesso em {caminho_saida}")
