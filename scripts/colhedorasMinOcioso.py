@@ -830,95 +830,86 @@ def identificar_operadores_duplicados(df):
     print(f"Encontrados {len(duplicidades)} operadores com IDs duplicadas.")
     return mapeamento, pd.DataFrame(duplicidades)
 
-def criar_excel_com_planilhas(df_base, base_calculo, disp_mecanica, eficiencia_energetica,
-                            hora_elevador, motor_ocioso, uso_gps, horas_por_frota, caminho_saida,
-                            df_duplicados=None, media_velocidade=None, df_substituicoes=None):
+def criar_excel_com_planilhas(df_base_calculo, df_motor_ocioso, df_horas_por_frota, caminho_saida):
     """
-    Cria um arquivo Excel com todas as planilhas necessárias.
+    Cria um arquivo Excel com três planilhas: BASE_CALCULO, MOTOR_OCIOSO e HORAS_POR_FROTA.
     
     Args:
-        df_base (DataFrame): DataFrame com os dados base
-        base_calculo (DataFrame): DataFrame com a base de cálculo
-        disp_mecanica (DataFrame): DataFrame com disponibilidade mecânica
-        eficiencia_energetica (DataFrame): DataFrame com eficiência energética
-        hora_elevador (DataFrame): DataFrame com hora do elevador
-        motor_ocioso (DataFrame): DataFrame com motor ocioso
-        uso_gps (DataFrame): DataFrame com uso do GPS
-        horas_por_frota (DataFrame): DataFrame com horas por frota
-        caminho_saida (str): Caminho onde o arquivo Excel será salvo
-        df_duplicados (DataFrame, optional): DataFrame com IDs duplicadas
-        media_velocidade (DataFrame, optional): DataFrame com média de velocidade
-        df_substituicoes (DataFrame, optional): DataFrame com IDs substituídas
+        df_base_calculo (DataFrame): DataFrame com os dados da base de cálculo
+        df_motor_ocioso (DataFrame): DataFrame com os dados de motor ocioso
+        df_horas_por_frota (DataFrame): DataFrame com as horas por frota
+        caminho_saida (str): Caminho do arquivo Excel de saída
     """
-    # Definir função de ajuste de largura de colunas
-    def ajustar_largura_colunas(worksheet):
-        """Ajusta a largura das colunas da planilha"""
-        for col in worksheet.columns:
-            # Definir uma largura mínima para todas as colunas
-            max_length = 10
-            column = col[0].column_letter  # Obter a letra da coluna
+    try:
+        # Criar cópias dos DataFrames para não modificar os originais
+        df_base = df_base_calculo.copy()
+        df_motor = df_motor_ocioso.copy()
+        df_horas = df_horas_por_frota.copy()
+        
+        # Identificar colunas de tempo em cada DataFrame
+        colunas_tempo_base = ['Diferença_Hora', 'Horas Produtivas']
+        colunas_tempo_motor = ['Tempo Ocioso', 'Tempo Ligado']
+        colunas_tempo_horas = ['Horas Produtivas', 'Horas Improdutivas', 'Horas Totais']
+        
+        # Ordenar df_motor_ocioso pela porcentagem (do menor para o maior)
+        if 'Porcentagem' in df_motor.columns:
+            df_motor = df_motor.sort_values('Porcentagem')
             
-            # Verificar largura baseada no conteúdo do cabeçalho
-            header_text = str(col[0].value)
-            if header_text:
-                max_length = max(max_length, len(header_text) + 2)  # +2 para dar espaço extra
+        # Ordenar df_horas_por_frota pelas horas totais (do maior para o menor)
+        if 'Horas Totais' in df_horas.columns:
+            df_horas = df_horas.sort_values('Horas Totais', ascending=False)
+        
+        # Criar um novo arquivo Excel
+        writer = pd.ExcelWriter(caminho_saida, engine='openpyxl')
+        
+        # Salvar os DataFrames nas respectivas abas
+        df_base.to_excel(writer, sheet_name='BASE_CALCULO', index=False)
+        df_motor.to_excel(writer, sheet_name='MOTOR_OCIOSO', index=False)
+        df_horas.to_excel(writer, sheet_name='HORAS_POR_FROTA', index=False)
+        
+        # Ajustar largura das colunas e aplicar formatação
+        workbook = writer.book
+        
+        # Configurar cada planilha
+        sheets_config = {
+            'BASE_CALCULO': {'df': df_base, 'time_cols': colunas_tempo_base},
+            'MOTOR_OCIOSO': {'df': df_motor, 'time_cols': colunas_tempo_motor},
+            'HORAS_POR_FROTA': {'df': df_horas, 'time_cols': colunas_tempo_horas}
+        }
+        
+        for sheet_name, config in sheets_config.items():
+            worksheet = writer.sheets[sheet_name]
+            df = config['df']
+            time_cols = config['time_cols']
             
-            # Ajustar a largura baseada no conteúdo das células (amostragem)
-            for cell in col[1:min(20, len(col))]:  # Limitar a verificação a 20 linhas para performance
-                if cell.value:
-                    cell_text = str(cell.value)
-                    max_length = max(max_length, len(cell_text) + 2)
-            
-            # Limitar a largura máxima para evitar colunas excessivamente largas
-            max_length = min(max_length, 40)
-            
-            # Definir a largura da coluna
-            worksheet.column_dimensions[column].width = max_length
-    
-    # Criar o arquivo Excel
-    writer = pd.ExcelWriter(caminho_saida, engine='openpyxl')
-    
-    # Salvar cada DataFrame em uma planilha separada
-    df_base.to_excel(writer, sheet_name='BASE', index=False)
-    base_calculo.to_excel(writer, sheet_name='Base Calculo', index=False)
-    
-    # Planilhas auxiliares (formatadas conforme necessário)
-    disp_mecanica.to_excel(writer, sheet_name='1_Disponibilidade Mecânica', index=False)
-    eficiencia_energetica.to_excel(writer, sheet_name='2_Eficiência Energética', index=False)
-    hora_elevador.to_excel(writer, sheet_name='3_Hora Elevador', index=False)
-    motor_ocioso.to_excel(writer, sheet_name='4_Motor Ocioso', index=False)
-    uso_gps.to_excel(writer, sheet_name='5_Uso GPS', index=False)
-    horas_por_frota.to_excel(writer, sheet_name='Horas por Frota', index=False)
-    
-    # Adicionar planilha de Média Velocidade (sempre)
-    if media_velocidade is None:
-        media_velocidade = pd.DataFrame(columns=['Operador', 'Velocidade'])
-    media_velocidade.to_excel(writer, sheet_name='Média Velocidade', index=False)
-    
-    # Adicionar planilha de IDs duplicadas, se existir
-    if df_duplicados is not None and not df_duplicados.empty:
-        df_duplicados.to_excel(writer, sheet_name='IDs Encontradas', index=False)
-        worksheet = writer.book['IDs Encontradas']
-        ajustar_largura_colunas(worksheet)
-    
-    # Adicionar planilha de IDs substituídas, se existir
-    if df_substituicoes is not None and not df_substituicoes.empty:
-        df_substituicoes.to_excel(writer, sheet_name='IDs Substituídas', index=False)
-        worksheet = writer.book['IDs Substituídas']
-        ajustar_largura_colunas(worksheet)
-    
-    # Aplicar formatação nas planilhas
-    workbook = writer.book
-    
-    # Formatar planilha de Média Velocidade (sempre)
-    worksheet = workbook['Média Velocidade']
-    ajustar_largura_colunas(worksheet)
-    for row in range(2, worksheet.max_row + 1):
-        cell = worksheet.cell(row=row, column=2)  # Coluna B (Velocidade)
-        cell.number_format = '0.00'  # Formato decimal normal com 2 casas
-    
-    writer.close()
-    print(f"Arquivo Excel salvo com sucesso em {caminho_saida}")
+            # Ajustar largura das colunas
+            for idx, col in enumerate(df.columns):
+                max_length = max(
+                    df[col].astype(str).apply(len).max(),
+                    len(str(col))
+                )
+                adjusted_width = (max_length + 2)
+                worksheet.column_dimensions[get_column_letter(idx + 1)].width = adjusted_width
+                
+                # Aplicar formatação de tempo sem dividir por 24
+                if col in time_cols:
+                    for row in range(2, worksheet.max_row + 1):
+                        cell = worksheet.cell(row=row, column=idx + 1)
+                        cell.number_format = '[h]:mm:ss'  # Formato que permite mais de 24 horas
+                
+                # Aplicar formatação de porcentagem
+                if col == 'Porcentagem':
+                    for row in range(2, worksheet.max_row + 1):
+                        cell = worksheet.cell(row=row, column=idx + 1)
+                        cell.number_format = '0.00%'
+        
+        # Salvar o arquivo
+        writer.close()
+        print(f"Arquivo {caminho_saida} gerado com sucesso!")
+        
+    except Exception as e:
+        print(f"Erro ao gerar arquivo {caminho_saida}: {str(e)}")
+        print(f"Arquivo {caminho_saida} gerado com apenas a planilha BASE_CALCULO (sem dados).")
 
 def extrair_arquivo_zip(caminho_zip, pasta_destino=None):
     """
@@ -1229,26 +1220,38 @@ def salvar_planilha_base(df, caminho_saida):
         caminho_saida (str): Caminho do arquivo Excel de saída
     """
     try:
+        # Criar uma cópia do DataFrame para não modificar o original
+        df_excel = df.copy()
+        
+        # Identificar colunas de tempo
+        colunas_tempo = ['Diferença_Hora', 'Horas Produtivas']
+        
         # Criar um novo arquivo Excel
         writer = pd.ExcelWriter(caminho_saida, engine='openpyxl')
         
         # Salvar o DataFrame na aba BASE
-        df.to_excel(writer, sheet_name='BASE', index=False)
+        df_excel.to_excel(writer, sheet_name='BASE', index=False)
         
         # Ajustar largura das colunas
         workbook = writer.book
         worksheet = writer.sheets['BASE']
         
-        for idx, col in enumerate(df.columns):
+        for idx, col in enumerate(df_excel.columns):
             # Encontrar a largura máxima na coluna
             max_length = max(
-                df[col].astype(str).apply(len).max(),  # Comprimento máximo dos dados
+                df_excel[col].astype(str).apply(len).max(),  # Comprimento máximo dos dados
                 len(str(col))  # Comprimento do cabeçalho
             )
             # Adicionar um pouco de espaço extra
             adjusted_width = (max_length + 2)
             # Definir a largura da coluna (converter para unidades do Excel)
             worksheet.column_dimensions[get_column_letter(idx + 1)].width = adjusted_width
+            
+            # Formatar colunas de tempo
+            if col in colunas_tempo:
+                for row in range(2, worksheet.max_row + 1):
+                    cell = worksheet.cell(row=row, column=idx + 1)
+                    cell.number_format = '[h]:mm:ss'  # Formato que permite mais de 24 horas
         
         # Salvar o arquivo
         writer.close()
