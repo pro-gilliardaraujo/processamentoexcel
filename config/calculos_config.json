@@ -28,8 +28,7 @@
         "MANUTENCAO",
         "MANUTENÇÃO",
         "INST CONFIG TECNOL EMBARCADAS",
-        "1055 - MANOBRA",
-        "8030 - CHUVA- VENTO-UMIDADE-TEMPERATURA"
+        "1055 - MANOBRA"
       ],
       "grupos_operacao_excluidos": [
         "Manutenção", "Inaptidão"

@@ -8,6 +8,10 @@
     "operador_destino": "327574 - GILVAN CIRIACO DA SILVA"
   },
   {
+    "operador_origem": "1331013 - NAO CADASTRADO",
+    "operador_destino": "327574 - GILVAN CIRIACO DA SILVA"
+  },
+  {
     "operador_origem": "1331016 - JOSE EDUARDO DE DEUS SANTOS",
     "operador_destino": "108717 - JOSE EDUARDO DE DEUS SANTOS"
   },
@@ -20,7 +24,15 @@
     "operador_destino": "795183 - CREGINALDO BATISTA DE ARAUJO"
   },
   {
+    "operador_origem": "1331007 - NAO CADASTRADO",
+    "operador_destino": "795183 - CREGINALDO BATISTA DE ARAUJO"
+  },
+  {
     "operador_origem": "1330000 - JOSE SILVA",
+    "operador_destino": "133 - JOSE SILVA"
+  },
+  {
+    "operador_origem": "1330000 - NAO CADASTRADO",
     "operador_destino": "133 - JOSE SILVA"
   },
   {
@@ -28,11 +40,31 @@
     "operador_destino": "134 - PEDRO SANTOS"
   },
   {
+    "operador_origem": "1330001 - NAO CADASTRADO",
+    "operador_destino": "134 - PEDRO SANTOS"
+  },
+  {
     "operador_origem": "1330002 - ANTONIO OLIVEIRA",
+    "operador_destino": "135 - ANTONIO OLIVEIRA"
+  },
+  {
+    "operador_origem": "1330002 - NAO CADASTRADO",
     "operador_destino": "135 - ANTONIO OLIVEIRA"
   },
   {
     "operador_origem": "133769 - JOELTON DOS SANTOS",
     "operador_destino": "112996 - JOELTON DOS SANTOS"
+  },
+  {
+    "operador_origem": "133769 - NAO CADASTRADO",
+    "operador_destino": "112996 - JOELTON DOS SANTOS"
+  },
+  {
+    "operador_origem": "1331003 - ALAILSON SILVA DOS SANTOS",
+    "operador_destino": "586416 - ALAILSON SILVA DOS SANTOS"
+  },
+  {
+    "operador_origem": "1331003 - NAO CADASTRADO",
+    "operador_destino": "586416 - ALAILSON SILVA DOS SANTOS"
   }
 ] 
