@@ -38,11 +38,139 @@ COLUNAS_DESEJADAS = [
     'Data', 'Hora', 'Equipamento', 'Descricao Equipamento', 'Estado', 'Estado Operacional',
     'Grupo Equipamento/Frente', 'Grupo Operacao', 'Horimetro', 'Motor Ligado', 'Operacao', 'Operador',
     'RPM Motor', 'Tipo de Equipamento', 'Velocidade', 'Parado com motor ligado',
-    'Diferença_Hora', 'Horas Produtivas', 'GPS'
+    'Diferença_Hora', 'Horas Produtivas', 'GPS', 'Motor Ocioso'
 ]
 
 # Valores a serem filtrados
 OPERADORES_EXCLUIR = ["9999 - TROCA DE TURNO"]
+
+def calcular_motor_ocioso_novo(df):
+    """
+    Calcula o tempo de motor ocioso de acordo com as novas regras:
+    1. Intervalo é fechado quando encontra 'Parado com Motor Ligado = 0' com duração > 1 minuto
+    2. Soma sequências de 'Parado com Motor Ligado = 1' com 'Parado com Motor Ligado = 0' < 1 minuto
+    3. Se o total > 1 minuto, subtrai 1 minuto; se menor, descarta o intervalo
+    
+    Args:
+        df (DataFrame): DataFrame com os dados de operação
+        
+    Returns:
+        DataFrame: DataFrame com as colunas 'Operador', 'Porcentagem', 'Tempo Ligado', 'Tempo Ocioso'
+    """
+    # Converter a coluna de diferença para minutos
+    df = df.copy()  # Criar uma cópia para não modificar o original
+    df['Diferença_Minutos'] = df['Diferença_Hora'] * 60
+    
+    # Inicializar colunas
+    df['Motor Ocioso'] = 0
+    df['Em_Intervalo'] = False
+    df['Soma_Intervalo'] = 0
+    
+    # Variáveis para controle do intervalo atual
+    em_intervalo = False
+    soma_intervalo = 0
+    inicio_intervalo = None
+    
+    # Iterar sobre as linhas do DataFrame
+    for i in range(len(df)):
+        parada_motor = df.iloc[i]['Parado com motor ligado']
+        diferenca = df.iloc[i]['Diferença_Minutos']
+        
+        # Se não estamos em um intervalo
+        if not em_intervalo:
+            # Se encontrar Parado com Motor Ligado = 1, inicia novo intervalo
+            if parada_motor == 1:
+                em_intervalo = True
+                soma_intervalo = diferenca
+                inicio_intervalo = i
+                df.at[i, 'Em_Intervalo'] = True
+                df.at[i, 'Soma_Intervalo'] = soma_intervalo
+        
+        # Se estamos em um intervalo
+        else:
+            # Se encontrar Parado com Motor Ligado = 0
+            if parada_motor == 0:
+                # Se a duração for > 1 minuto, fecha o intervalo
+                if diferenca > 1:
+                    # Se o total acumulado > 1 minuto, subtrai 1 minuto
+                    if soma_intervalo > 1:
+                        tempo_ocioso = soma_intervalo - 1
+                        # Atribui o tempo ocioso à primeira linha do intervalo
+                        # IMPORTANTE: Converter de minutos para horas antes de atribuir
+                        df.at[inicio_intervalo, 'Motor Ocioso'] = tempo_ocioso / 60.0  # Dividir por 60 para converter minutos em horas
+                    
+                    # Reseta o intervalo
+                    em_intervalo = False
+                    soma_intervalo = 0
+                    inicio_intervalo = None
+                else:
+                    # Se <= 1 minuto, soma ao intervalo atual
+                    soma_intervalo += diferenca
+                    df.at[i, 'Em_Intervalo'] = True
+                    df.at[i, 'Soma_Intervalo'] = soma_intervalo
+            
+            # Se encontrar Parado com Motor Ligado = 1
+            else:
+                soma_intervalo += diferenca
+                df.at[i, 'Em_Intervalo'] = True
+                df.at[i, 'Soma_Intervalo'] = soma_intervalo
+    
+    # Tratar último intervalo aberto, se houver
+    if em_intervalo and soma_intervalo > 1:
+        tempo_ocioso = soma_intervalo - 1
+        # Converter de minutos para horas antes de atribuir
+        df.at[inicio_intervalo, 'Motor Ocioso'] = tempo_ocioso / 60.0  # Dividir por 60 para converter minutos em horas
+    
+    # Garantir que o tempo ocioso nunca seja maior que o tempo ligado para cada registro
+    for i in range(len(df)):
+        if df.iloc[i]['Motor Ocioso'] > 0:
+            # Para transbordos, Motor Ligado é 'LIGADO' ou 'DESLIGADO', não 1 ou 0
+            motor_ligado = df.iloc[i]['Motor Ligado'] == 'LIGADO'
+            # Se o motor estiver ligado, limitar o tempo ocioso ao tempo ligado
+            if motor_ligado:
+                tempo_hora = df.iloc[i]['Diferença_Hora']
+                if df.iloc[i]['Motor Ocioso'] > tempo_hora:
+                    df.at[i, 'Motor Ocioso'] = tempo_hora
+            else:
+                # Se o motor não estiver ligado, o tempo ocioso deve ser zero
+                df.at[i, 'Motor Ocioso'] = 0
+    
+    # Calcular motor ocioso por operador para retornar em formato adequado para a planilha
+    # Filtrar operadores excluídos
+    df_filtrado = df[~df['Operador'].isin(OPERADORES_EXCLUIR)]
+    
+    # Agrupar por operador
+    resultado_motor_ocioso = []
+    
+    print("\n=== DETALHAMENTO DO CÁLCULO DE MOTOR OCIOSO (MÉTODO NOVO) ===")
+    
+    for operador in df_filtrado['Operador'].unique():
+        dados_operador = df_filtrado[df_filtrado['Operador'] == operador]
+        
+        # Calcular tempo de motor ligado
+        tempo_ligado = dados_operador[dados_operador['Motor Ligado'] == 'LIGADO']['Diferença_Hora'].sum()
+        
+        # Calcular tempo ocioso (soma da coluna Motor Ocioso)
+        tempo_ocioso = dados_operador['Motor Ocioso'].sum()
+        
+        # Calcular porcentagem
+        porcentagem = tempo_ocioso / tempo_ligado if tempo_ligado > 0 else 0
+        
+        print(f"\nOperador: {operador}")
+        print(f"Tempo Ligado: {tempo_ligado:.6f}")
+        print(f"Tempo Ocioso: {tempo_ocioso:.6f}")
+        print(f"Porcentagem: {porcentagem:.6f}")
+        print("-" * 50)
+        
+        resultado_motor_ocioso.append({
+            'Operador': operador,
+            'Porcentagem': porcentagem,
+            'Tempo Ligado': tempo_ligado,
+            'Tempo Ocioso': tempo_ocioso
+        })
+    
+    # Retornar DataFrame formatado para a planilha
+    return pd.DataFrame(resultado_motor_ocioso)
 
 def carregar_config_calculos():
     """
@@ -341,11 +469,11 @@ def calcular_base_calculo(df):
     Cálculos principais:
     - Horas totais: soma de Diferença_Hora
     - Motor Ligado: soma de Diferença_Hora onde Motor Ligado = LIGADO
-    - Parado com motor ligado: soma de Diferença_Hora onde Motor Ligado = LIGADO E Velocidade = 0
+    - Parado com motor ligado: usa os valores da coluna Motor Ocioso que foi preenchida pelo novo algoritmo
     - GPS: soma de Diferença_Hora onde RTK = 1
     
     Args:
-        df (DataFrame): DataFrame processado
+        df (DataFrame): DataFrame processado com a coluna Motor Ocioso já preenchida
     
     Returns:
         DataFrame: Tabela Base Calculo com todas as métricas calculadas
@@ -398,11 +526,8 @@ def calcular_base_calculo(df):
         if dias_operador > 1:
             motor_ligado = motor_ligado / dias_operador
         
-        # Parado com motor ligado - soma de Diferença_Hora onde Motor Ligado = LIGADO E Velocidade = 0
-        parado_motor_ligado = dados_filtrados[
-            (dados_filtrados['Motor Ligado'] == 'LIGADO') & 
-            (dados_filtrados['Velocidade'] == 0)
-        ]['Diferença_Hora'].sum()
+        # Parado com motor ligado - usa os valores da coluna Motor Ocioso calculados pelo novo algoritmo
+        parado_motor_ligado = dados_filtrados['Motor Ocioso'].sum()
         if dias_operador > 1:
             parado_motor_ligado = parado_motor_ligado / dias_operador
         
@@ -439,7 +564,7 @@ def calcular_base_calculo(df):
         # Debug para verificar os valores
         print(f"\nOperador: {operador} em {equipamento}")
         print(f"Motor Ligado: {motor_ligado:.6f}")
-        print(f"Parado com motor ligado: {parado_motor_ligado:.6f}")
+        print(f"Motor Ocioso (novo cálculo): {parado_motor_ligado:.6f}")
         print(f"% Parado com motor ligado: {percent_parado_motor:.6f}")
         print(f"Falta de Apontamento: {falta_apontamento:.6f}")
         print(f"% Falta de Apontamento: {percent_falta_apontamento:.6f}")
@@ -628,128 +753,47 @@ def calcular_eficiencia_energetica(base_calculo):
     
     return pd.DataFrame(resultados)
 
-def calcular_motor_ocioso(df):
+def calcular_motor_ocioso(base_calculo, df_base=None):
     """
-    Calcula o tempo ocioso do motor para cada operador.
-    Exclui do cálculo:
-    - Operações listadas em operacoes_excluidas no arquivo de configuração
-    - Operações dos grupos listados em grupos_operacao_excluidos
-    - Operadores listados em operadores_excluidos
-    
-    Regras de cálculo:
-    1. Existe uma tolerância de 1 minuto para operações de "Parado com motor ligado" (valor 1)
-    2. Se uma operação tem "Parado com motor ligado = 1" e dura menos de 1 minuto, ela é desconsiderada se:
-       - A próxima operação tem "Parado com motor ligado = 0" e dura mais de 1 minuto
-    3. Se existem duas ou mais operações com "Parado com motor ligado = 1" em sequência (ou com outras operações entre elas que duram menos de 1 minuto):
-       - Somamos o tempo total dessas operações
-       - Subtraímos 1 minuto do total
+    Calcula o percentual de motor ocioso por operador usando os dados da Base Calculo.
+    Agora usa diretamente os valores calculados na Base Calculo ao invés de recalcular.
     
     Args:
-        df (DataFrame): DataFrame com os dados processados
+        base_calculo (DataFrame): Tabela Base Calculo
+        df_base (DataFrame): DataFrame base (não usado mais, mantido para compatibilidade)
     
     Returns:
-        DataFrame: DataFrame com as colunas:
+        DataFrame: Percentual de motor ocioso por operador com as colunas:
             - Operador
-            - Porcentagem (porcentagem do tempo ocioso em relação ao tempo ligado)
-            - Tempo Ligado (horas com motor ligado)
-            - Tempo Ocioso (horas parado com motor ligado)
+            - Porcentagem
+            - Tempo Ligado (vem da coluna 'Motor Ligado' da Base Calculo)
+            - Tempo Ocioso (vem da coluna 'Parado com motor ligado' da Base Calculo)
     """
-    # Carregar configurações
-    config = carregar_config_calculos()
+    # Agrupar por operador (caso o mesmo operador apareça em múltiplas linhas)
+    agrupado = base_calculo.groupby('Operador').agg({
+        'Motor Ligado': 'sum',
+        'Parado com motor ligado': 'sum'  # Nome correto da coluna para transbordos
+    }).reset_index()
     
-    # Agrupar por operador
     resultados = []
+    print("\n=== DETALHAMENTO DO CÁLCULO DE MOTOR OCIOSO (USANDO BASE CALCULO) ===")
     
-    # Filtrar operadores excluídos
-    df = df[~df['Operador'].isin(OPERADORES_EXCLUIR)]
-    
-    # Excluir operações de acordo com a configuração
-    operacoes_excluidas = config['TT']['motor_ocioso']['operacoes_excluidas']
-    grupos_excluidos = config['TT']['motor_ocioso']['grupos_operacao_excluidos']
-    
-    # Criar máscara para operações excluídas
-    mask_operacoes = df['Operacao'].str.contains('|'.join(operacoes_excluidas), case=False, na=False)
-    
-    # Criar máscara para grupos excluídos
-    mask_grupos = df['Grupo Operacao'].isin(grupos_excluidos)
-    
-    # Aplicar filtros
-    df = df[~(mask_operacoes | mask_grupos)]
-    
-    # Obter lista de operadores únicos
-    operadores = df['Operador'].unique()
-    
-    for operador in operadores:
-        # Filtrar dados do operador
-        dados_operador = df[df['Operador'] == operador]
+    for _, row in agrupado.iterrows():
+        tempo_ligado = row['Motor Ligado']
+        tempo_ocioso = row['Parado com motor ligado']  # Nome correto da coluna para transbordos
         
-        # Ordenar por Data e Hora para garantir sequência temporal
-        if 'Data' in dados_operador.columns and 'Hora' in dados_operador.columns:
-            dados_operador = dados_operador.sort_values(by=['Data', 'Hora'])
+        # Calcular porcentagem
+        porcentagem = tempo_ocioso / tempo_ligado if tempo_ligado > 0 else 0
         
-        # Calcular tempo total com motor ligado
-        tempo_ligado = dados_operador[
-            dados_operador['Motor Ligado'] == 'LIGADO'
-        ]['Diferença_Hora'].sum()
-        
-        # Calcular tempo ocioso com a nova lógica de tolerância
-        tempo_ocioso = 0
-        i = 0
-        while i < len(dados_operador):
-            # Verificar se é uma parada com motor ligado
-            if dados_operador.iloc[i]['Parado com motor ligado'] == 1:
-                # Iniciar uma sequência de paradas
-                tempo_sequencia = dados_operador.iloc[i]['Diferença_Hora']
-                ultima_parada = i
-                
-                # Avançar até encontrar o fim da sequência
-                j = i + 1
-                sequencia_continua = True
-                while j < len(dados_operador) and sequencia_continua:
-                    # Se encontrou uma operação não ociosa
-                    if dados_operador.iloc[j]['Parado com motor ligado'] == 0:
-                        # Verificar se a operação não ociosa dura mais de 1 minuto
-                        if dados_operador.iloc[j]['Diferença_Hora'] > 1/60:  # 1 minuto em horas
-                            # Se a sequência anterior durou menos de 1 minuto, desconsiderar
-                            if tempo_sequencia < 1/60:
-                                tempo_sequencia = 0
-                            sequencia_continua = False
-                        else:
-                            # Operação não ociosa com menos de 1 minuto, continuar a sequência
-                            tempo_sequencia += dados_operador.iloc[j]['Diferença_Hora']
-                    else:
-                        # Outra operação ociosa, continuar a sequência
-                        tempo_sequencia += dados_operador.iloc[j]['Diferença_Hora']
-                        ultima_parada = j
-                    
-                    j += 1
-                
-                # Se a sequência durou mais de 1 minuto, adicionar ao tempo ocioso
-                if tempo_sequencia >= 1/60:
-                    # Subtrair 1 minuto da sequência (se houver mais de 1 minuto)
-                    tempo_sequencia = max(0, tempo_sequencia - 1/60)
-                    tempo_ocioso += tempo_sequencia
-                
-                # Avançar para depois da última parada da sequência
-                i = ultima_parada + 1
-            else:
-                i += 1
-        
-        # Calcular porcentagem de tempo ocioso
-        if tempo_ligado > 0:
-            percent_ocioso = round((tempo_ocioso / tempo_ligado), 4)
-        else:
-            percent_ocioso = 0
-        
-        # Debug para verificar os valores
-        print(f"\nOperador: {operador}")
-        print(f"Tempo Ligado: {tempo_ligado:.6f}")
-        print(f"Tempo Ocioso: {tempo_ocioso:.6f}")
-        print(f"Porcentagem: {percent_ocioso:.6f}")
+        print(f"\nOperador: {row['Operador']}")
+        print(f"Tempo Ligado (Motor Ligado): {tempo_ligado:.6f}")
+        print(f"Tempo Ocioso (Parado com motor ligado): {tempo_ocioso:.6f}")
+        print(f"Porcentagem: {porcentagem:.6f}")
+        print("-" * 50)
         
         resultados.append({
-            'Operador': operador,
-            'Porcentagem': percent_ocioso,
+            'Operador': row['Operador'],
+            'Porcentagem': porcentagem,
             'Tempo Ligado': tempo_ligado,
             'Tempo Ocioso': tempo_ocioso
         })
@@ -974,9 +1018,9 @@ def criar_excel_com_planilhas(df_base, base_calculo, disp_mecanica, eficiencia_e
                     cell = worksheet.cell(row=row, column=2)  # Coluna B (Porcentagem)
                     cell.number_format = '0.00%'
                     cell = worksheet.cell(row=row, column=3)  # Coluna C (Tempo Ligado)
-                    cell.number_format = '[h]:mm:ss'  # Formato que permite mais de 24 horas
+                    cell.number_format = '0.00'  # Formato decimal
                     cell = worksheet.cell(row=row, column=4)  # Coluna D (Tempo Ocioso)
-                    cell.number_format = '[h]:mm:ss'  # Formato que permite mais de 24 horas
+                    cell.number_format = '0.00'  # Formato decimal
             
             elif sheet_name == '4_Falta Apontamento':
                 for row in range(2, worksheet.max_row + 1):
@@ -997,7 +1041,7 @@ def criar_excel_com_planilhas(df_base, base_calculo, disp_mecanica, eficiencia_e
                 for row in range(2, worksheet.max_row + 1):
                     for col in range(2, worksheet.max_column + 1):  # Todas as colunas de tempo
                         cell = worksheet.cell(row=row, column=col)
-                        cell.number_format = '[h]:mm:ss'  # Formato que permite mais de 24 horas
+                        cell.number_format = '0.00'  # Formato decimal
             
             elif sheet_name == 'Base Calculo':
                 colunas_porcentagem = ['% Parado com motor ligado', '% Utilização GPS', '% Falta de Apontamento']
@@ -1011,7 +1055,7 @@ def criar_excel_com_planilhas(df_base, base_calculo, disp_mecanica, eficiencia_e
                         if header in colunas_porcentagem:
                             cell.number_format = '0.00%'
                         elif header in colunas_tempo:
-                            cell.number_format = '[h]:mm:ss'  # Formato que permite mais de 24 horas
+                            cell.number_format = '0.00'  # Formato decimal
 
 def extrair_arquivo_zip(caminho_zip, pasta_destino=None):
     """
@@ -1187,8 +1231,8 @@ def processar_arquivo(caminho_arquivo, diretorio_saida):
     # Obter apenas o nome do arquivo (sem caminho e sem extensão)
     nome_base = os.path.splitext(os.path.basename(caminho_arquivo))[0]
     
-    # Nome de saída igual ao original, mas com extensão .xlsx na pasta output
-    arquivo_saida = os.path.join(diretorio_saida, f"{nome_base}.xlsx")
+    # Nome de saída igual ao original, mas com sufixo "_min" e extensão .xlsx na pasta output
+    arquivo_saida = os.path.join(diretorio_saida, f"{nome_base}_min.xlsx")
     
     print(f"\nProcessando arquivo: {os.path.basename(caminho_arquivo)}")
     print(f"Arquivo de saída: {os.path.basename(arquivo_saida)}")
@@ -1221,23 +1265,27 @@ def processar_arquivo(caminho_arquivo, diretorio_saida):
         print(f"Arquivo {arquivo_saida} gerado com apenas a planilha BASE (sem dados).")
         return
     
-    # Calcular a Base Calculo
-    base_calculo = calcular_base_calculo(df_base)
+    # Primeiro, aplicar o novo cálculo de motor ocioso no DataFrame
+    # Esta função modifica o df_base adicionando a coluna 'Motor Ocioso' e também retorna um DataFrame formatado para a planilha
+    df_base_com_motor_ocioso = calcular_motor_ocioso_para_base(df_base)
+    
+    # Agora calculamos a Base Calculo
+    base_calculo = calcular_base_calculo(df_base_com_motor_ocioso)
     
     # Calcular as métricas auxiliares
-    disp_mecanica = calcular_disponibilidade_mecanica(df_base)
+    disp_mecanica = calcular_disponibilidade_mecanica(df_base_com_motor_ocioso)
     eficiencia_energetica = calcular_eficiencia_energetica(base_calculo)
-    motor_ocioso = calcular_motor_ocioso(df_base)
+    motor_ocioso = calcular_motor_ocioso_novo(df_base_com_motor_ocioso)
     falta_apontamento = calcular_falta_apontamento(base_calculo)
     uso_gps = calcular_uso_gps(base_calculo)
-    horas_por_frota = calcular_horas_por_frota(df_base)
+    horas_por_frota = calcular_horas_por_frota(df_base_com_motor_ocioso)
     
     # Calcular média de velocidade por operador
-    media_velocidade = calcular_media_velocidade(df_base)
+    media_velocidade = calcular_media_velocidade(df_base_com_motor_ocioso)
     
     # Criar o arquivo Excel com todas as planilhas
     criar_excel_com_planilhas(
-        df_base, base_calculo, disp_mecanica, eficiencia_energetica,
+        df_base_com_motor_ocioso, base_calculo, disp_mecanica, eficiencia_energetica,
         motor_ocioso, falta_apontamento, uso_gps, horas_por_frota, arquivo_saida,
         df_duplicados,  # Adicionar a tabela de IDs duplicadas
         media_velocidade,  # Adicionar a tabela de média de velocidade
@@ -1283,7 +1331,7 @@ def salvar_planilha_base(df, caminho_saida):
             if col in colunas_tempo:
                 for row in range(2, worksheet.max_row + 1):
                     cell = worksheet.cell(row=row, column=idx + 1)
-                    cell.number_format = '[h]:mm:ss'  # Formato que permite mais de 24 horas
+                    cell.number_format = '0.00'  # Formato decimal
         
         # Salvar arquivo
         writer.close()
@@ -1292,6 +1340,102 @@ def salvar_planilha_base(df, caminho_saida):
     except Exception as e:
         print(f"Erro ao gerar arquivo {caminho_saida}: {str(e)}")
         print(f"Arquivo {caminho_saida} não foi gerado.")
+
+def calcular_motor_ocioso_para_base(df):
+    """
+    Calcula o tempo de motor ocioso de acordo com as novas regras e modifica o DataFrame original.
+    Esta função MODIFICA o DataFrame passado, adicionando a coluna 'Motor Ocioso'.
+    
+    Args:
+        df (DataFrame): DataFrame com os dados de operação
+        
+    Returns:
+        DataFrame: DataFrame modificado com a coluna 'Motor Ocioso' atualizada
+    """
+    # Criar uma cópia para modificar
+    df_resultado = df.copy()
+    
+    # Converter a coluna de diferença para minutos
+    df_resultado['Diferença_Minutos'] = df_resultado['Diferença_Hora'] * 60
+    
+    # Inicializar colunas
+    df_resultado['Motor Ocioso'] = 0
+    df_resultado['Em_Intervalo'] = False
+    df_resultado['Soma_Intervalo'] = 0
+    
+    # Variáveis para controle do intervalo atual
+    em_intervalo = False
+    soma_intervalo = 0
+    inicio_intervalo = None
+    
+    # Iterar sobre as linhas do DataFrame
+    for i in range(len(df_resultado)):
+        parada_motor = df_resultado.iloc[i]['Parado com motor ligado']
+        diferenca = df_resultado.iloc[i]['Diferença_Minutos']
+        
+        # Se não estamos em um intervalo
+        if not em_intervalo:
+            # Se encontrar Parado com Motor Ligado = 1, inicia novo intervalo
+            if parada_motor == 1:
+                em_intervalo = True
+                soma_intervalo = diferenca
+                inicio_intervalo = i
+                df_resultado.at[i, 'Em_Intervalo'] = True
+                df_resultado.at[i, 'Soma_Intervalo'] = soma_intervalo
+        
+        # Se estamos em um intervalo
+        else:
+            # Se encontrar Parado com Motor Ligado = 0
+            if parada_motor == 0:
+                # Se a duração for > 1 minuto, fecha o intervalo
+                if diferenca > 1:
+                    # Se o total acumulado > 1 minuto, subtrai 1 minuto
+                    if soma_intervalo > 1:
+                        tempo_ocioso = soma_intervalo - 1
+                        # Atribui o tempo ocioso à primeira linha do intervalo
+                        # IMPORTANTE: Converter de minutos para horas antes de atribuir
+                        df_resultado.at[inicio_intervalo, 'Motor Ocioso'] = tempo_ocioso / 60.0  # Dividir por 60 para converter minutos em horas
+                    
+                    # Reseta o intervalo
+                    em_intervalo = False
+                    soma_intervalo = 0
+                    inicio_intervalo = None
+                else:
+                    # Se <= 1 minuto, soma ao intervalo atual
+                    soma_intervalo += diferenca
+                    df_resultado.at[i, 'Em_Intervalo'] = True
+                    df_resultado.at[i, 'Soma_Intervalo'] = soma_intervalo
+            
+            # Se encontrar Parado com Motor Ligado = 1
+            else:
+                soma_intervalo += diferenca
+                df_resultado.at[i, 'Em_Intervalo'] = True
+                df_resultado.at[i, 'Soma_Intervalo'] = soma_intervalo
+    
+    # Tratar último intervalo aberto, se houver
+    if em_intervalo and soma_intervalo > 1:
+        tempo_ocioso = soma_intervalo - 1
+        # Converter de minutos para horas antes de atribuir
+        df_resultado.at[inicio_intervalo, 'Motor Ocioso'] = tempo_ocioso / 60.0  # Dividir por 60 para converter minutos em horas
+    
+    # Garantir que o tempo ocioso nunca seja maior que o tempo ligado para cada registro
+    for i in range(len(df_resultado)):
+        if df_resultado.iloc[i]['Motor Ocioso'] > 0:
+            # Para transbordos, Motor Ligado é 'LIGADO' ou 'DESLIGADO', não 1 ou 0
+            motor_ligado = df_resultado.iloc[i]['Motor Ligado'] == 'LIGADO'
+            # Se o motor estiver ligado, limitar o tempo ocioso ao tempo ligado
+            if motor_ligado:
+                tempo_hora = df_resultado.iloc[i]['Diferença_Hora']
+                if df_resultado.iloc[i]['Motor Ocioso'] > tempo_hora:
+                    df_resultado.at[i, 'Motor Ocioso'] = tempo_hora
+            else:
+                # Se o motor não estiver ligado, o tempo ocioso deve ser zero
+                df_resultado.at[i, 'Motor Ocioso'] = 0
+    
+    # Remover colunas auxiliares
+    df_resultado = df_resultado.drop(['Diferença_Minutos', 'Em_Intervalo', 'Soma_Intervalo'], axis=1)
+    
+    return df_resultado
 
 if __name__ == "__main__":
     print("="*80)
