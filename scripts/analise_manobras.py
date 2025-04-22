@@ -563,21 +563,21 @@ def criar_dashboard(df_manobras, metricas):
         
         # Gráfico por tipo de equipamento
         if 'Tipo_Equipamento' in df_filtrado.columns:
-            tipo_equip = df_filtrado.groupby('Tipo_Equipamento').size()
-            fig_tipo_equip = go.Figure(data=[
-                go.Bar(
-                    x=tipo_equip.index,
-                    y=tipo_equip.values,
-                    text=tipo_equip.values,
-                    textposition='auto'
-                )
-            ])
-            fig_tipo_equip.update_layout(
-                title="Distribuição por Tipo de Equipamento",
-                xaxis_title="Tipo de Equipamento",
-                yaxis_title="Quantidade de Manobras",
-                margin=dict(l=40, r=40, t=40, b=40)
+        tipo_equip = df_filtrado.groupby('Tipo_Equipamento').size()
+        fig_tipo_equip = go.Figure(data=[
+            go.Bar(
+                x=tipo_equip.index,
+                y=tipo_equip.values,
+                text=tipo_equip.values,
+                textposition='auto'
             )
+        ])
+        fig_tipo_equip.update_layout(
+            title="Distribuição por Tipo de Equipamento",
+            xaxis_title="Tipo de Equipamento",
+            yaxis_title="Quantidade de Manobras",
+            margin=dict(l=40, r=40, t=40, b=40)
+        )
         else:
             fig_tipo_equip = go.Figure()
         
@@ -601,20 +601,20 @@ def criar_dashboard(df_manobras, metricas):
         # Tabela de operadores
         if 'Operador' in df_filtrado.columns:
             df_operadores = df_filtrado.groupby(['Equipamento', 'Operador']).agg({
-                'Equipamento': 'count',
+            'Equipamento': 'count',
                 'Duração (h)': 'sum'
-            }).round(4)
-            
-            df_operadores.columns = ['Quantidade', 'Tempo_Total (h)']
-            df_operadores = df_operadores.reset_index()
-            
-            tabela = dbc.Table.from_dataframe(
-                df_operadores,
-                striped=True,
-                bordered=True,
-                hover=True,
-                responsive=True
-            )
+        }).round(4)
+        
+        df_operadores.columns = ['Quantidade', 'Tempo_Total (h)']
+        df_operadores = df_operadores.reset_index()
+        
+        tabela = dbc.Table.from_dataframe(
+            df_operadores,
+            striped=True,
+            bordered=True,
+            hover=True,
+            responsive=True
+        )
         else:
             tabela = html.Div("Dados de operadores não disponíveis")
         
@@ -647,7 +647,7 @@ def criar_excel_com_metricas_manobras(df_base, df_manobras, df_metricas_gerais, 
             # 2. Planilhas com métricas agregadas por diferentes critérios
             for nome_planilha, df_metricas in metricas_agregadas.items():
                 df_metricas.to_excel(writer, sheet_name=nome_planilha, index=False)
-            
+                
             # 3. Ajustar a aparência das planilhas
             for sheet_name in writer.sheets:
                 worksheet = writer.sheets[sheet_name]
@@ -716,9 +716,9 @@ def criar_excel_com_metricas_manobras(df_base, df_manobras, df_metricas_gerais, 
                         cell.style = 'Headline 3'
             
             print(f"\nArquivo Excel criado com sucesso: {caminho_alternativo}")
-            return True
+        return True
         
-        except Exception as e:
+    except Exception as e:
             print(f"\nErro ao criar arquivo Excel alternativo: {str(e)}")
             return False
     
@@ -890,7 +890,7 @@ def calcular_metricas_manobras(df, palavras_chave_manobra=None, debug=True):
         if 'Data_Hora' in colunas_faltantes or 'Operacao' in colunas_faltantes:
             print("ERRO: Colunas críticas faltantes. Impossível calcular métricas.")
             return None, None, None
-    
+            
     # Verificar se a coluna Diferença_Hora existe, senão criar
     if 'Diferença_Hora' not in df.columns:
         print("AVISO: Coluna 'Diferença_Hora' não encontrada. Criando...")
@@ -1018,8 +1018,8 @@ def calcular_metricas_manobras(df, palavras_chave_manobra=None, debug=True):
                 rpm_acumulado += rpm
                 velocidade_acumulada += velocidade
                 pontos_coletados += 1
-            continue
-        
+                continue
+                
         # Calcula o intervalo de tempo em horas
         intervalo = diferenca_hora
         
@@ -1547,14 +1547,14 @@ def processar_arquivo(arquivo):
     """
     Processa um único arquivo de manobras e gera o Excel com métricas e dashboard interativo
     """
-    if not os.path.exists(arquivo):
-        print(f"Arquivo não encontrado: {arquivo}")
+        if not os.path.exists(arquivo):
+            print(f"Arquivo não encontrado: {arquivo}")
         return False
             
     print(f"Processando arquivo: {arquivo}")
-    df = processar_arquivo_base(arquivo)
+        df = processar_arquivo_base(arquivo)
         
-    if df is not None and not df.empty:
+        if df is not None and not df.empty:
         # Carrega configurações
         config = carregar_config_calculos(silencioso=True)
         
@@ -1575,12 +1575,12 @@ def processar_arquivo(arquivo):
         )
         
         if df_manobras is not None:
-            # Salva resultados em Excel
+                # Salva resultados em Excel
             nome_base = os.path.splitext(os.path.basename(arquivo))[0]
             caminho_saida = os.path.join(OUTPUT_DIR, f"{nome_base}.xlsx")
                 
             if criar_excel_com_metricas_manobras(df, df_manobras, df_metricas_gerais, metricas_agregadas, caminho_saida):
-                print(f"Resultados salvos em: {caminho_saida}")
+                    print(f"Resultados salvos em: {caminho_saida}")
                 
                 # Criar e iniciar o dashboard interativo
                 app = criar_dashboard(df_manobras, metricas_agregadas)
@@ -1588,14 +1588,14 @@ def processar_arquivo(arquivo):
                 print("Acesse http://127.0.0.1:8050 no seu navegador")
                 app.run(debug=False)
                 return True
-            else:
-                print("Erro ao salvar resultados")
+                else:
+                    print("Erro ao salvar resultados")
                 return False
         else:
             print("Não foi possível identificar manobras no arquivo")
             return False
-    else:
-        print("Não foi possível processar o arquivo") 
+        else:
+            print("Não foi possível processar o arquivo") 
         return False
 
 if __name__ == "__main__":
