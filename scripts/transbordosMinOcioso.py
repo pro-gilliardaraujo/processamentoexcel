@@ -57,6 +57,24 @@ def calcular_motor_ocioso_novo(df):
     Returns:
         DataFrame: DataFrame com as colunas 'Operador', 'Porcentagem', 'Tempo Ligado', 'Tempo Ocioso'
     """
+    # Carregar configurações de cálculos
+    config = carregar_config_calculos()
+    tipo_equipamento = "TT"  # Para transbordos
+    
+    # Obter operações e grupos excluídos da configuração
+    operacoes_excluidas = []
+    grupos_operacao_excluidos = []
+    operadores_excluidos = OPERADORES_EXCLUIR.copy()
+    
+    if tipo_equipamento in config and "motor_ocioso" in config[tipo_equipamento]:
+        operacoes_excluidas = config[tipo_equipamento]["motor_ocioso"].get("operacoes_excluidas", [])
+        grupos_operacao_excluidos = config[tipo_equipamento]["motor_ocioso"].get("grupos_operacao_excluidos", [])
+        if "operadores_excluidos" in config[tipo_equipamento]["motor_ocioso"]:
+            operadores_excluidos.extend(config[tipo_equipamento]["motor_ocioso"]["operadores_excluidos"])
+    
+    print(f"Operações excluídas do cálculo de motor ocioso: {operacoes_excluidas}")
+    print(f"Grupos de operação excluídos do cálculo de motor ocioso: {grupos_operacao_excluidos}")
+    
     # Converter a coluna de diferença para minutos
     df = df.copy()  # Criar uma cópia para não modificar o original
     df['Diferença_Minutos'] = df['Diferença_Hora'] * 60
@@ -66,15 +84,25 @@ def calcular_motor_ocioso_novo(df):
     df['Em_Intervalo'] = False
     df['Soma_Intervalo'] = 0
     
+    # Filtrar operações e grupos de operação excluídos
+    df_filtrado_config = df.copy()
+    if operacoes_excluidas:
+        df_filtrado_config = df_filtrado_config[~df_filtrado_config['Operacao'].isin(operacoes_excluidas)]
+    if grupos_operacao_excluidos:
+        df_filtrado_config = df_filtrado_config[~df_filtrado_config['Grupo Operacao'].isin(grupos_operacao_excluidos)]
+    
+    print(f"Total de registros antes da filtragem: {len(df)}")
+    print(f"Total de registros após filtragem por operações e grupos excluídos: {len(df_filtrado_config)}")
+    
     # Variáveis para controle do intervalo atual
     em_intervalo = False
     soma_intervalo = 0
     inicio_intervalo = None
     
-    # Iterar sobre as linhas do DataFrame
-    for i in range(len(df)):
-        parada_motor = df.iloc[i]['Parado com motor ligado']
-        diferenca = df.iloc[i]['Diferença_Minutos']
+    # Iterar sobre as linhas do DataFrame filtrado
+    for i, row in df_filtrado_config.iterrows():
+        parada_motor = row['Parado com motor ligado']
+        diferenca = row['Diferença_Minutos']
         
         # Se não estamos em um intervalo
         if not em_intervalo:
@@ -137,7 +165,7 @@ def calcular_motor_ocioso_novo(df):
     
     # Calcular motor ocioso por operador para retornar em formato adequado para a planilha
     # Filtrar operadores excluídos
-    df_filtrado = df[~df['Operador'].isin(OPERADORES_EXCLUIR)]
+    df_filtrado = df[~df['Operador'].isin(operadores_excluidos)]
     
     # Agrupar por operador
     resultado_motor_ocioso = []
@@ -174,18 +202,25 @@ def calcular_motor_ocioso_novo(df):
 
 def carregar_config_calculos():
     """
-    Carrega as configurações de cálculos do arquivo JSON.
-    Se o arquivo não existir, retorna configurações padrão.
+    Retorna as configurações de cálculos embutidas diretamente no código.
+    As configurações são as mesmas definidas no arquivo calculos_config.json.
     """
-    config_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "config", "calculos_config.json")
-    
-    # Configuração padrão
-    config_padrao = {
+    # Configurações embutidas diretamente no código
+    config = {
         "CD": {
             "motor_ocioso": {
                 "tipo_calculo": "Remover do cálculo",
-                "operacoes_excluidas": [],
-                "grupos_operacao_excluidos": [],
+                "operacoes_excluidas": [
+                    "8490 - LAVAGEM",
+                    "MANUTENCAO",
+                    "LAVAGEM",
+                    "INST CONFIG TECNOL EMBARCADAS",
+                    "1055 - MANOBRA"
+                ],
+                "grupos_operacao_excluidos": [
+                    "Manutenção", 
+                    "Inaptidão"
+                ],
                 "operadores_excluidos": []
             },
             "equipamentos_excluidos": []
@@ -193,40 +228,27 @@ def carregar_config_calculos():
         "TT": {
             "motor_ocioso": {
                 "tipo_calculo": "Remover do cálculo",
-                "operacoes_excluidas": [],
-                "grupos_operacao_excluidos": [],
+                "operacoes_excluidas": [
+                    "9016 - ENCH SISTEMA FREIO",
+                    "6340 - BASCULANDO  TRANSBORDAGEM",
+                    "9024 - DESATOLAMENTO",
+                    "MANUTENCAO",
+                    "MANUTENÇÃO",
+                    "INST CONFIG TECNOL EMBARCADAS",
+                    "1055 - MANOBRA"
+                ],
+                "grupos_operacao_excluidos": [
+                    "Manutenção", 
+                    "Inaptidão"
+                ],
                 "operadores_excluidos": []
             },
             "equipamentos_excluidos": []
         }
     }
     
-    try:
-        if os.path.exists(config_path):
-            with open(config_path, 'r', encoding='utf-8') as f:
-                config = json.load(f)
-                
-                # Garantir que os equipamentos excluídos sejam tratados como texto
-                for tipo in ["CD", "TT"]:
-                    if tipo in config and "equipamentos_excluidos" in config[tipo]:
-                        config[tipo]["equipamentos_excluidos"] = [str(eq).replace('.0', '') for eq in config[tipo]["equipamentos_excluidos"]]
-                
-                return config
-        else:
-            # Criar diretório config se não existir
-            config_dir = os.path.dirname(config_path)
-            if not os.path.exists(config_dir):
-                os.makedirs(config_dir)
-                
-            # Criar arquivo de configuração padrão
-            with open(config_path, 'w', encoding='utf-8') as f:
-                json.dump(config_padrao, f, indent=4, ensure_ascii=False)
-                
-            print(f"Arquivo de configuração criado em {config_path} com valores padrão.")
-            return config_padrao
-    except Exception as e:
-        print(f"Erro ao carregar configurações: {str(e)}. Usando configuração padrão.")
-        return config_padrao
+    print("Usando configurações embutidas no código, ignorando o arquivo calculos_config.json")
+    return config
 
 def carregar_substituicoes_operadores():
     """
@@ -777,6 +799,7 @@ def calcular_motor_ocioso(base_calculo, df_base=None):
     
     resultados = []
     print("\n=== DETALHAMENTO DO CÁLCULO DE MOTOR OCIOSO (USANDO BASE CALCULO) ===")
+    print("Nota: A Base Calculo já considera as operações e grupos excluídos conforme a configuração.")
     
     for _, row in agrupado.iterrows():
         tempo_ligado = row['Motor Ligado']
@@ -1345,6 +1368,7 @@ def calcular_motor_ocioso_para_base(df):
     """
     Calcula o tempo de motor ocioso de acordo com as novas regras e modifica o DataFrame original.
     Esta função MODIFICA o DataFrame passado, adicionando a coluna 'Motor Ocioso'.
+    Considera as configurações de exclusão de operações e grupos de operação do arquivo de configuração.
     
     Args:
         df (DataFrame): DataFrame com os dados de operação
@@ -1352,6 +1376,21 @@ def calcular_motor_ocioso_para_base(df):
     Returns:
         DataFrame: DataFrame modificado com a coluna 'Motor Ocioso' atualizada
     """
+    # Carregar configurações de cálculos
+    config = carregar_config_calculos()
+    tipo_equipamento = "TT"  # Para transbordos
+    
+    # Obter operações e grupos excluídos da configuração
+    operacoes_excluidas = []
+    grupos_operacao_excluidos = []
+    
+    if tipo_equipamento in config and "motor_ocioso" in config[tipo_equipamento]:
+        operacoes_excluidas = config[tipo_equipamento]["motor_ocioso"].get("operacoes_excluidas", [])
+        grupos_operacao_excluidos = config[tipo_equipamento]["motor_ocioso"].get("grupos_operacao_excluidos", [])
+    
+    print(f"Operações excluídas do cálculo de motor ocioso: {operacoes_excluidas}")
+    print(f"Grupos de operação excluídos do cálculo de motor ocioso: {grupos_operacao_excluidos}")
+    
     # Criar uma cópia para modificar
     df_resultado = df.copy()
     
@@ -1363,15 +1402,25 @@ def calcular_motor_ocioso_para_base(df):
     df_resultado['Em_Intervalo'] = False
     df_resultado['Soma_Intervalo'] = 0
     
+    # Filtrar operações e grupos de operação excluídos
+    df_filtrado_config = df_resultado.copy()
+    if operacoes_excluidas:
+        df_filtrado_config = df_filtrado_config[~df_filtrado_config['Operacao'].isin(operacoes_excluidas)]
+    if grupos_operacao_excluidos:
+        df_filtrado_config = df_filtrado_config[~df_filtrado_config['Grupo Operacao'].isin(grupos_operacao_excluidos)]
+    
+    print(f"Total de registros antes da filtragem: {len(df_resultado)}")
+    print(f"Total de registros após filtragem por operações e grupos excluídos: {len(df_filtrado_config)}")
+    
     # Variáveis para controle do intervalo atual
     em_intervalo = False
     soma_intervalo = 0
     inicio_intervalo = None
     
-    # Iterar sobre as linhas do DataFrame
-    for i in range(len(df_resultado)):
-        parada_motor = df_resultado.iloc[i]['Parado com motor ligado']
-        diferenca = df_resultado.iloc[i]['Diferença_Minutos']
+    # Iterar sobre as linhas do DataFrame filtrado
+    for i, row in df_filtrado_config.iterrows():
+        parada_motor = row['Parado com motor ligado']
+        diferenca = row['Diferença_Minutos']
         
         # Se não estamos em um intervalo
         if not em_intervalo:

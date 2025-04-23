@@ -61,57 +61,51 @@ MAPEAMENTO_BOOLEANO = {
 
 def carregar_config_calculos():
     """
-    Carrega as configurações de cálculos do arquivo JSON.
-    Se o arquivo não existir, retorna configurações padrão.
+    Retorna as configurações de cálculos embutidas diretamente no código.
+    As configurações são as mesmas definidas no arquivo calculos_config.json.
     """
-    config_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "config", "calculos_config.json")
-    
-    # Configuração padrão
-    config_padrao = {
+    # Configurações embutidas diretamente no código
+    config = {
         "CD": {
             "motor_ocioso": {
                 "tipo_calculo": "Remover do cálculo",
-                "operacoes_excluidas": [],
-                "grupos_operacao_excluidos": []
+                "operacoes_excluidas": [
+                    "8490 - LAVAGEM",
+                    "MANUTENCAO",
+                    "LAVAGEM",
+                    "INST CONFIG TECNOL EMBARCADAS",
+                    "1055 - MANOBRA"
+                ],
+                "grupos_operacao_excluidos": [
+                    "Manutenção", 
+                    "Inaptidão"
+                ]
             },
             "equipamentos_excluidos": []
         },
-        "TR": {
+        "TT": {
             "motor_ocioso": {
                 "tipo_calculo": "Remover do cálculo",
-                "operacoes_excluidas": [],
-                "grupos_operacao_excluidos": []
+                "operacoes_excluidas": [
+                    "9016 - ENCH SISTEMA FREIO",
+                    "6340 - BASCULANDO  TRANSBORDAGEM",
+                    "9024 - DESATOLAMENTO",
+                    "MANUTENCAO",
+                    "MANUTENÇÃO",
+                    "INST CONFIG TECNOL EMBARCADAS",
+                    "1055 - MANOBRA"
+                ],
+                "grupos_operacao_excluidos": [
+                    "Manutenção", 
+                    "Inaptidão"
+                ]
             },
             "equipamentos_excluidos": []
         }
     }
     
-    try:
-        if os.path.exists(config_path):
-            with open(config_path, 'r', encoding='utf-8') as f:
-                config = json.load(f)
-                
-                # Garantir que os equipamentos excluídos sejam tratados como texto
-                for tipo in ["CD", "TR"]:
-                    if tipo in config and "equipamentos_excluidos" in config[tipo]:
-                        config[tipo]["equipamentos_excluidos"] = [str(eq).replace('.0', '') for eq in config[tipo]["equipamentos_excluidos"]]
-                
-                return config
-        else:
-            # Criar diretório config se não existir
-            config_dir = os.path.dirname(config_path)
-            if not os.path.exists(config_dir):
-                os.makedirs(config_dir)
-                
-            # Criar arquivo de configuração padrão
-            with open(config_path, 'w', encoding='utf-8') as f:
-                json.dump(config_padrao, f, indent=4, ensure_ascii=False)
-                
-            print(f"Arquivo de configuração criado em {config_path} com valores padrão.")
-            return config_padrao
-    except Exception as e:
-        print(f"Erro ao carregar configurações: {str(e)}. Usando configuração padrão.")
-        return config_padrao
+    print("Usando configurações embutidas no código, ignorando o arquivo calculos_config.json")
+    return config
 
 def calcular_motor_ocioso_novo(df):
     """

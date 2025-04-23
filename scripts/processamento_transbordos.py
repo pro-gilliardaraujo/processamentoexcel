@@ -45,18 +45,25 @@ OPERADORES_EXCLUIR = ["9999 - TROCA DE TURNO"]
 
 def carregar_config_calculos():
     """
-    Carrega as configurações de cálculos do arquivo JSON.
-    Se o arquivo não existir, retorna configurações padrão.
+    Retorna as configurações de cálculos embutidas diretamente no código.
+    As configurações são as mesmas definidas no arquivo calculos_config.json.
     """
-    config_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "config", "calculos_config.json")
-    
-    # Configuração padrão
-    config_padrao = {
+    # Configurações embutidas diretamente no código
+    config = {
         "CD": {
             "motor_ocioso": {
                 "tipo_calculo": "Remover do cálculo",
-                "operacoes_excluidas": [],
-                "grupos_operacao_excluidos": [],
+                "operacoes_excluidas": [
+                    "8490 - LAVAGEM",
+                    "MANUTENCAO",
+                    "LAVAGEM",
+                    "INST CONFIG TECNOL EMBARCADAS",
+                    "1055 - MANOBRA"
+                ],
+                "grupos_operacao_excluidos": [
+                    "Manutenção", 
+                    "Inaptidão"
+                ],
                 "operadores_excluidos": []
             },
             "equipamentos_excluidos": []
@@ -64,40 +71,27 @@ def carregar_config_calculos():
         "TT": {
             "motor_ocioso": {
                 "tipo_calculo": "Remover do cálculo",
-                "operacoes_excluidas": [],
-                "grupos_operacao_excluidos": [],
+                "operacoes_excluidas": [
+                    "9016 - ENCH SISTEMA FREIO",
+                    "6340 - BASCULANDO  TRANSBORDAGEM",
+                    "9024 - DESATOLAMENTO",
+                    "MANUTENCAO",
+                    "MANUTENÇÃO",
+                    "INST CONFIG TECNOL EMBARCADAS",
+                    "1055 - MANOBRA"
+                ],
+                "grupos_operacao_excluidos": [
+                    "Manutenção", 
+                    "Inaptidão"
+                ],
                 "operadores_excluidos": []
             },
             "equipamentos_excluidos": []
         }
     }
     
-    try:
-        if os.path.exists(config_path):
-            with open(config_path, 'r', encoding='utf-8') as f:
-                config = json.load(f)
-                
-                # Garantir que os equipamentos excluídos sejam tratados como texto
-                for tipo in ["CD", "TT"]:
-                    if tipo in config and "equipamentos_excluidos" in config[tipo]:
-                        config[tipo]["equipamentos_excluidos"] = [str(eq).replace('.0', '') for eq in config[tipo]["equipamentos_excluidos"]]
-                
-                return config
-        else:
-            # Criar diretório config se não existir
-            config_dir = os.path.dirname(config_path)
-            if not os.path.exists(config_dir):
-                os.makedirs(config_dir)
-                
-            # Criar arquivo de configuração padrão
-            with open(config_path, 'w', encoding='utf-8') as f:
-                json.dump(config_padrao, f, indent=4, ensure_ascii=False)
-                
-            print(f"Arquivo de configuração criado em {config_path} com valores padrão.")
-            return config_padrao
-    except Exception as e:
-        print(f"Erro ao carregar configurações: {str(e)}. Usando configuração padrão.")
-        return config_padrao
+    print("Usando configurações embutidas no código, ignorando o arquivo calculos_config.json")
+    return config
 
 def carregar_substituicoes_operadores():
     """
@@ -349,6 +343,10 @@ def calcular_base_calculo(df):
     Returns:
         DataFrame: Tabela Base Calculo com todas as métricas calculadas
     """
+    # Carregar configurações de cálculos
+    config = carregar_config_calculos()
+    tipo_equipamento = "TT"  # Para transbordos
+    
     # Detectar número de dias totais nos dados (apenas para informação)
     dias_unicos_total = df['Data'].nunique() if 'Data' in df.columns else 1
     print(f"Detectados {dias_unicos_total} dias distintos na base de dados.")
@@ -356,8 +354,12 @@ def calcular_base_calculo(df):
     # Extrair combinações únicas de Equipamento, Grupo Equipamento/Frente e Operador
     combinacoes = df[['Equipamento', 'Grupo Equipamento/Frente', 'Operador']].drop_duplicates().reset_index(drop=True)
     
-    # Filtrar operadores excluídos
-    combinacoes = combinacoes[~combinacoes['Operador'].isin(OPERADORES_EXCLUIR)]
+    # Filtrar operadores excluídos (da constante e da configuração)
+    operadores_excluidos = OPERADORES_EXCLUIR.copy()
+    if tipo_equipamento in config and "motor_ocioso" in config[tipo_equipamento] and "operadores_excluidos" in config[tipo_equipamento]["motor_ocioso"]:
+        operadores_excluidos.extend(config[tipo_equipamento]["motor_ocioso"]["operadores_excluidos"])
+    
+    combinacoes = combinacoes[~combinacoes['Operador'].isin(operadores_excluidos)]
     
     # Inicializar as colunas de métricas
     resultados = []
@@ -397,11 +399,29 @@ def calcular_base_calculo(df):
         if dias_operador > 1:
             motor_ligado = motor_ligado / dias_operador
         
-        # Parado com motor ligado - soma de Diferença_Hora onde Motor Ligado = LIGADO E Velocidade = 0
-        parado_motor_ligado = dados_filtrados[
-            (dados_filtrados['Motor Ligado'] == 'LIGADO') & 
-            (dados_filtrados['Velocidade'] == 0)
-        ]['Diferença_Hora'].sum()
+        # Parado com motor ligado - considerando as exclusões configuradas
+        # Obter operações e grupos excluídos da configuração
+        operacoes_excluidas = []
+        grupos_operacao_excluidos = []
+        
+        if tipo_equipamento in config and "motor_ocioso" in config[tipo_equipamento]:
+            operacoes_excluidas = config[tipo_equipamento]["motor_ocioso"].get("operacoes_excluidas", [])
+            grupos_operacao_excluidos = config[tipo_equipamento]["motor_ocioso"].get("grupos_operacao_excluidos", [])
+        
+        # Filtrar registros para cálculo do motor ocioso
+        filtro_motor_ocioso = (dados_filtrados['Motor Ligado'] == 'LIGADO') & \
+                            (dados_filtrados['Velocidade'] == 0)
+        
+        # Remover operações excluídas
+        if operacoes_excluidas:
+            filtro_motor_ocioso = filtro_motor_ocioso & ~dados_filtrados['Operacao'].isin(operacoes_excluidas)
+        
+        # Remover grupos de operação excluídos
+        if grupos_operacao_excluidos:
+            filtro_motor_ocioso = filtro_motor_ocioso & ~dados_filtrados['Grupo Operacao'].isin(grupos_operacao_excluidos)
+        
+        # Calcular parado com motor ligado
+        parado_motor_ligado = dados_filtrados[filtro_motor_ocioso]['Diferença_Hora'].sum()
         if dias_operador > 1:
             parado_motor_ligado = parado_motor_ligado / dias_operador
         
@@ -609,7 +629,7 @@ def calcular_eficiencia_energetica(base_calculo):
     
     return pd.DataFrame(resultados)
 
-def calcular_motor_ocioso(base_calculo, df_base):
+def calcular_motor_ocioso(base_calculo, df_base=None):
     """
     Calcula o percentual de motor ocioso por operador usando os dados da Base Calculo.
     Agora usa diretamente os valores calculados na Base Calculo ao invés de recalcular.
@@ -633,6 +653,7 @@ def calcular_motor_ocioso(base_calculo, df_base):
     
     resultados = []
     print("\n=== DETALHAMENTO DO CÁLCULO DE MOTOR OCIOSO (USANDO BASE CALCULO) ===")
+    print("Nota: A Base Calculo já considera as operações e grupos excluídos conforme a configuração.")
     
     for _, row in agrupado.iterrows():
         tempo_ligado = row['Motor Ligado']
