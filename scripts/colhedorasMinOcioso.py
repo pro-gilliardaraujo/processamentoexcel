@@ -820,6 +820,73 @@ def identificar_operadores_duplicados(df):
     print(f"Encontrados {len(duplicidades)} operadores com IDs duplicadas.")
     return mapeamento, pd.DataFrame(duplicidades)
 
+def calcular_horas_motor_ligado_total(df):
+    """
+    Calcula o total de horas com motor ligado por frota durante todo o período,
+    e também a média diária.
+    Usa a coluna 'Diferença_Hora' para calcular o tempo real com motor ligado.
+    
+    Args:
+        df (DataFrame): DataFrame com os dados de operação
+        
+    Returns:
+        DataFrame: DataFrame com o total de horas com motor ligado por frota e a média diária
+    """
+    try:
+        # Verificar se as colunas necessárias existem
+        if 'Data' not in df.columns:
+            print("Aviso: Coluna 'Data' não encontrada. Usando o número total de registros como divisor.")
+            # Criar uma coluna temporária para calcular as horas com motor ligado
+            df_temp = df.copy()
+            df_temp['Horas_Motor_Ligado'] = df_temp.apply(
+                lambda row: row['Diferença_Hora'] if row['Motor Ligado'] == 1 else 0, 
+                axis=1
+            )
+            
+            # Agrupa por frota e soma as horas com motor ligado
+            df_horas_motor = df_temp.groupby('Equipamento').agg({
+                'Horas_Motor_Ligado': 'sum'
+            }).reset_index()
+            
+            # Renomeia a coluna para maior clareza
+            df_horas_motor.columns = ['Frota', 'Total Horas Motor Ligado']
+            
+            # Ordena pelo total de horas (decrescente)
+            df_horas_motor = df_horas_motor.sort_values('Total Horas Motor Ligado', ascending=False)
+            
+            return df_horas_motor
+        
+        # Criar uma coluna temporária para calcular as horas com motor ligado
+        df_temp = df.copy()
+        df_temp['Horas_Motor_Ligado'] = df_temp.apply(
+            lambda row: row['Diferença_Hora'] if row['Motor Ligado'] == 1 else 0, 
+            axis=1
+        )
+        
+        # Agrupa por frota e calcula o total de horas com motor ligado e o número de dias
+        df_horas_motor = df_temp.groupby('Equipamento').agg({
+            'Horas_Motor_Ligado': 'sum',
+            'Data': 'nunique'  # Conta o número de dias únicos para cada frota
+        }).reset_index()
+        
+        # Renomeia as colunas para maior clareza
+        df_horas_motor.columns = ['Frota', 'Total Horas Motor Ligado', 'Dias Registrados']
+        
+        # Calcula a média diária de horas com motor ligado
+        df_horas_motor['Horas Motor Ligado por Dia'] = df_horas_motor['Total Horas Motor Ligado'] / df_horas_motor['Dias Registrados']
+        
+        # Ordena pelo total de horas (decrescente)
+        df_horas_motor = df_horas_motor.sort_values('Total Horas Motor Ligado', ascending=False)
+        
+        # Mantém todas as colunas relevantes
+        df_horas_motor = df_horas_motor[['Frota', 'Total Horas Motor Ligado', 'Horas Motor Ligado por Dia', 'Dias Registrados']]
+        
+        return df_horas_motor
+        
+    except Exception as e:
+        print(f"Erro ao calcular horas totais de motor ligado: {str(e)}")
+        return pd.DataFrame(columns=['Frota', 'Total Horas Motor Ligado', 'Horas Motor Ligado por Dia', 'Dias Registrados'])
+
 def criar_excel_com_planilhas(df_base, base_calculo, disp_mecanica, eficiencia_energetica,
                             hora_elevador, motor_ocioso, uso_gps, horas_por_frota, caminho_saida,
                             df_duplicados=None, media_velocidade=None, df_substituicoes=None):
@@ -842,6 +909,9 @@ def criar_excel_com_planilhas(df_base, base_calculo, disp_mecanica, eficiencia_e
             max_length = min(max_length, 40)
             worksheet.column_dimensions[column].width = max_length
     
+    # Calcular horas totais de motor ligado por frota
+    df_horas_motor_total = calcular_horas_motor_ligado_total(df_base)
+    
     with pd.ExcelWriter(caminho_saida, engine='openpyxl') as writer:
         # Salvar cada DataFrame em uma planilha separada
         df_base.to_excel(writer, sheet_name='BASE', index=False)
@@ -858,6 +928,9 @@ def criar_excel_com_planilhas(df_base, base_calculo, disp_mecanica, eficiencia_e
         
         uso_gps.to_excel(writer, sheet_name='5_Uso GPS', index=False)
         horas_por_frota.to_excel(writer, sheet_name='Horas por Frota', index=False)
+        
+        # Adicionar a nova planilha com horas totais de motor ligado
+        df_horas_motor_total.to_excel(writer, sheet_name='Horas Motor', index=False)
         
         if media_velocidade is None:
             media_velocidade = pd.DataFrame(columns=['Operador', 'Velocidade'])
@@ -914,6 +987,15 @@ def criar_excel_com_planilhas(df_base, base_calculo, disp_mecanica, eficiencia_e
                     for col in range(2, worksheet.max_column + 1):  # Todas as colunas de tempo
                         cell = worksheet.cell(row=row, column=col)
                         cell.number_format = '0.00'
+            
+            elif sheet_name == 'Horas Motor':
+                for row in range(2, worksheet.max_row + 1):
+                    cell = worksheet.cell(row=row, column=2)  # Coluna B (Total Horas Motor Ligado)
+                    cell.number_format = '0.00'
+                    cell = worksheet.cell(row=row, column=3)  # Coluna C (Horas Motor Ligado por Dia)
+                    cell.number_format = '0.00'
+                    cell = worksheet.cell(row=row, column=4)  # Coluna D (Dias Registrados)
+                    cell.number_format = '0'
             
             elif sheet_name == 'Base Calculo':
                 colunas_porcentagem = ['%', '% Utilização RTK', '% Eficiência Elevador', '% Parado com motor ligado']
@@ -1094,9 +1176,11 @@ def extrair_arquivo_zip(caminho_zip, pasta_destino=None):
         # Se houve erro e criamos uma pasta temporária, tentar limpá-la
         if pasta_temp:
             try:
+                print(f"Removendo pasta temporária: {pasta_temp}")
                 shutil.rmtree(pasta_temp)
-            except:
-                pass
+                print(f"Pasta temporária removida com sucesso")
+            except Exception as e:
+                print(f"Erro ao remover pasta temporária {pasta_temp}: {str(e)}")
         return [], None
 
 def processar_todos_arquivos():
