@@ -155,6 +155,18 @@ def processar_arquivo_base(caminho_arquivo):
                 # Nova regra: se Diferença_Hora > 0.50, então 0
                 df['Diferença_Hora'] = df['Diferença_Hora'].apply(lambda x: 0 if x > 0.50 else x)
             
+            # Converter todos os campos booleanos para valores numéricos
+            colunas_booleanas = ['Esteira Ligada', 'Field Cruiser', 'RTK (Piloto Automatico)', 
+                                'Implemento Ligado', 'Motor Ligado', 'Corte Base Automatico/Manual']
+            
+            for coluna in colunas_booleanas:
+                if coluna in df.columns:
+                    # Converter para valores numéricos (1 para Sim, 0 para Não)
+                    df[coluna] = df[coluna].apply(lambda x: 
+                        1 if str(x).upper() in ['1', 'SIM', 'VERDADEIRO', 'TRUE', 'LIGADO', 'S'] or x is True
+                        else 0
+                    )
+            
             # Cálculos adicionais
             RPM_MINIMO = 300  # Definindo constante para RPM mínimo
 
@@ -290,12 +302,18 @@ def calcular_base_calculo(df):
         # Percentual horas elevador (em decimal 0-1)
         percent_elevador = calcular_porcentagem(horas_elevador, horas_totais)
         
+        # Garantir que RTK (Piloto Automatico) seja tratado como valor numérico
+        if 'RTK (Piloto Automatico)' in dados_filtrados.columns:
+            # Converter para valores numéricos (1 para Sim, 0 para Não)
+            dados_filtrados['RTK (Piloto Automatico)'] = dados_filtrados['RTK (Piloto Automatico)'].apply(lambda x: 
+                1 if x in [1, '1', 'SIM', 'Sim', 'sim', 'VERDADEIRO', 'TRUE', 'True', 'LIGADO', True] 
+                else 0
+            )
+        
         # RTK - soma de Diferença_Hora onde todas as condições são atendidas
         rtk = dados_filtrados[
-            (dados_filtrados['Operacao'] == '7290 - COLHEITA CANA MECANIZADA') &
-            (dados_filtrados['Pressao de Corte'] > 300) &
-            (dados_filtrados['RTK (Piloto Automatico)'] == 1) &
-            (dados_filtrados['Esteira Ligada'] == 1)
+            (dados_filtrados['Grupo Operacao'] == 'Produtiva') &
+            (dados_filtrados['RTK (Piloto Automatico)'] == 1)
         ]['Diferença_Hora'].sum()
         if dias_operador > 1:
             rtk = rtk / dias_operador
@@ -572,23 +590,47 @@ def calcular_uso_gps(df_base, base_calculo):
     Agrega os dados por operador, calculando a média ponderada quando um operador aparece em múltiplas frotas.
     
     Args:
-        df_base: Não usado mais, mantido para compatibilidade
+        df_base: DataFrame original com todos os dados
         base_calculo (DataFrame): Tabela Base Calculo
     
     Returns:
         DataFrame: Percentual de uso de GPS por operador (agregado)
     """
-    # Agrupar por operador e calcular a média ponderada
-    agrupado = base_calculo.groupby('Operador').agg({
-        'RTK': 'sum',
-        'Horas Produtivas': 'sum'
-    }).reset_index()
+    # Mapear RTK (Piloto Automatico) para valores numéricos (1 para Sim, 0 para Não)
+    df_temp = df_base.copy()
     
+    # Verificar se a coluna existe e converter para valores numéricos
+    if 'RTK (Piloto Automatico)' in df_temp.columns:
+        # Fazer o mapeamento de valores textuais para 0/1
+        df_temp['RTK (Piloto Automatico)'] = df_temp['RTK (Piloto Automatico)'].apply(lambda x: 
+            1 if x in [1, '1', 'SIM', 'Sim', 'sim', 'VERDADEIRO', 'TRUE', 'True', 'LIGADO', True] 
+            else 0
+        )
+    
+    # Calcular o uso do GPS considerando apenas registros produtivos com RTK ativo
     resultados = []
-    for _, row in agrupado.iterrows():
-        porcentagem = row['RTK'] / row['Horas Produtivas'] if row['Horas Produtivas'] > 0 else 0
+    operadores = df_temp['Operador'].unique()
+    
+    for operador in operadores:
+        # Filtrar dados para este operador
+        dados_op = df_temp[df_temp['Operador'] == operador]
+        
+        # Tempo com RTK ativo em operações produtivas
+        tempo_rtk = dados_op[
+            (dados_op['RTK (Piloto Automatico)'] == 1) & 
+            (dados_op['Grupo Operacao'] == 'Produtiva')
+        ]['Diferença_Hora'].sum()
+        
+        # Tempo total em operações produtivas
+        tempo_produtivo = dados_op[
+            dados_op['Grupo Operacao'] == 'Produtiva'
+        ]['Diferença_Hora'].sum()
+        
+        # Calcular porcentagem
+        porcentagem = tempo_rtk / tempo_produtivo if tempo_produtivo > 0 else 0
+        
         resultados.append({
-            'Operador': row['Operador'],
+            'Operador': operador,
             'Porcentagem': porcentagem
         })
     

@@ -440,17 +440,36 @@ def processar_arquivo_base(caminho_arquivo):
             # Coluna de GPS - Para transbordos, vamos considerar GPS quando houver "RTK (Piloto Automatico)" 
             # e Velocidade > 0 (se a coluna existir)
             if 'RTK (Piloto Automatico)' in df.columns:
-                df['GPS'] = df.apply(
-                    lambda row: row['Diferença_Hora'] if row.get('RTK (Piloto Automatico)', 0) == 1 
-                    and row['Velocidade'] > 0 and row['Grupo Operacao'] == 'Produtiva' else 0,
-                    axis=1
+                # Primeiro, garantir que RTK seja convertido para valores numéricos (1/0)
+                df['RTK (Piloto Automatico)'] = df['RTK (Piloto Automatico)'].apply(lambda x: 
+                    1 if (isinstance(x, bool) and x) or 
+                         (isinstance(x, (int, float)) and x == 1) or
+                         (isinstance(x, str) and str(x).upper().strip() in ['1', 'SIM', 'S', 'VERDADEIRO', 'TRUE', 'LIGADO'])
+                    else 0
                 )
+                
+                # Verificar se a coluna GPS já existe e tem valores
+                if 'GPS' not in df.columns or df['GPS'].isna().all() or (df['GPS'] == 0).all():
+                    print("Calculando coluna GPS com base em RTK (Piloto Automático)...")
+                    # Agora aplicar a lógica de GPS usando o RTK normalizado
+                    df['GPS'] = df.apply(
+                        lambda row: row['Diferença_Hora'] if row['RTK (Piloto Automatico)'] == 1 
+                        and row['Velocidade'] > 0 and row['Grupo Operacao'] == 'Produtiva' else 0,
+                        axis=1
+                    )
+                else:
+                    print("Coluna GPS já existe com valores. Mantendo os valores originais.")
+                    
+                # Verificar o total de horas com GPS ativo
+                total_gps = df['GPS'].sum()
+                print(f"Total de horas com GPS ativo: {total_gps:.4f}")
             else:
                 # Se não tiver a coluna RTK, criar uma coluna GPS zerada
                 df['GPS'] = 0
+                print("Coluna RTK (Piloto Automatico) não encontrada. GPS definido como zero.")
             
             # Conversão de colunas binárias para valores numéricos (garantindo que sejam números)
-            for col in ['Esteira Ligada', 'Field Cruiser', 'RTK (Piloto Automatico)', 'Implemento Ligado']:
+            for col in ['Esteira Ligada', 'Field Cruiser', 'Implemento Ligado']:  # RTK já foi tratado acima
                 if col in df.columns and col != 'Motor Ligado':  # Motor Ligado já foi tratado acima
                     # Se a coluna for texto (LIGADO/DESLIGADO), converter para 1/0
                     if df[col].dtype == 'object':
@@ -556,9 +575,12 @@ def calcular_base_calculo(df):
         # % Parado com motor ligado (em decimal 0-1)
         percent_parado_motor = calcular_porcentagem(parado_motor_ligado, motor_ligado)
         
-        # GPS - soma de Diferença_Hora onde RTK = 1
+        # GPS - Nesse ponto RTK já foi convertido para 1/0
+        # Soma de Diferença_Hora para registros produtivos com RTK=1 e velocidade>0
         gps = dados_filtrados[
-            dados_filtrados['RTK (Piloto Automatico)'] == 1
+            (dados_filtrados['RTK (Piloto Automatico)'] == 1) &
+            (dados_filtrados['Velocidade'] > 0) &
+            (dados_filtrados['Grupo Operacao'] == 'Produtiva')
         ]['Diferença_Hora'].sum()
         if dias_operador > 1:
             gps = gps / dias_operador
@@ -854,6 +876,7 @@ def calcular_uso_gps(base_calculo):
     """
     Extrai o uso de GPS da Base Calculo.
     Agrega os dados por operador, calculando a média ponderada quando um operador aparece em múltiplas frotas.
+    Os valores GPS e Horas Produtivas já foram pré-calculados na função calcular_base_calculo.
     
     Args:
         base_calculo (DataFrame): Tabela Base Calculo
@@ -861,7 +884,7 @@ def calcular_uso_gps(base_calculo):
     Returns:
         DataFrame: Percentual de uso de GPS por operador (agregado)
     """
-    # Agrupar por operador e calcular a média ponderada
+    # Agrupar por operador e calcular a soma
     agrupado = base_calculo.groupby('Operador').agg({
         'GPS': 'sum',
         'Horas Produtivas': 'sum'
@@ -869,7 +892,12 @@ def calcular_uso_gps(base_calculo):
     
     resultados = []
     for _, row in agrupado.iterrows():
+        # Calcular porcentagem (tempo com GPS ativo / tempo produtivo total)
         porcentagem = row['GPS'] / row['Horas Produtivas'] if row['Horas Produtivas'] > 0 else 0
+        
+        # Debug para verificar valores
+        print(f"Operador: {row['Operador']}, GPS: {row['GPS']:.4f}, Horas Produtivas: {row['Horas Produtivas']:.4f}, % GPS: {porcentagem:.4f}")
+        
         resultados.append({
             'Operador': row['Operador'],
             'Porcentagem': porcentagem
