@@ -288,18 +288,70 @@ def carregar_substituicoes_operadores():
         print(f"Erro ao carregar arquivo de substituição de operadores: {str(e)}")
         return {}
 
-def aplicar_substituicao_operadores(df, mapeamento_substituicoes):
+def carregar_substituicoes_operadores_horario():
+    """
+    Carrega o arquivo substituiroperadores_horario.json que contém os mapeamentos 
+    de substituição de operadores com intervalos de horário.
+    
+    Returns:
+        list: Lista de dicionários com mapeamentos {operador_origem, operador_destino, hora_inicio, hora_fim}
+        ou lista vazia se o arquivo não existir ou for inválido
+    """
+    # Obter o diretório onde está o script
+    diretorio_script = os.path.dirname(os.path.abspath(__file__))
+    
+    # Diretório raiz do projeto
+    diretorio_raiz = os.path.dirname(diretorio_script)
+    
+    # Caminho para o arquivo de substituição
+    arquivo_substituicao = os.path.join(diretorio_raiz, "config", "substituiroperadores_horario.json")
+    
+    # Verificar se o arquivo existe
+    if not os.path.exists(arquivo_substituicao):
+        print(f"Arquivo de substituição de operadores com horário não encontrado: {arquivo_substituicao}")
+        return []
+    
+    try:
+        # Carregar o arquivo JSON
+        with open(arquivo_substituicao, 'r', encoding='utf-8') as f:
+            substituicoes = json.load(f)
+        
+        # Converter strings de hora para objetos datetime.time
+        for item in substituicoes:
+            if 'hora_inicio' in item and isinstance(item['hora_inicio'], str):
+                hora_str = item['hora_inicio']
+                # Adicionar segundos se não estiverem presentes
+                if len(hora_str.split(':')) == 2:
+                    hora_str += ':00'
+                item['hora_inicio_obj'] = datetime.strptime(hora_str, '%H:%M:%S').time()
+            
+            if 'hora_fim' in item and isinstance(item['hora_fim'], str):
+                hora_str = item['hora_fim']
+                # Adicionar segundos se não estiverem presentes
+                if len(hora_str.split(':')) == 2:
+                    hora_str += ':00'
+                item['hora_fim_obj'] = datetime.strptime(hora_str, '%H:%M:%S').time()
+        
+        print(f"Carregadas {len(substituicoes)} substituições de operadores com intervalos de horário.")
+        return substituicoes
+        
+    except Exception as e:
+        print(f"Erro ao carregar arquivo de substituição de operadores com horário: {str(e)}")
+        return []
+
+def aplicar_substituicao_operadores(df, mapeamento_substituicoes, mapeamento_horario=None):
     """
     Aplica as substituições de operadores no DataFrame.
     
     Args:
         df (DataFrame): DataFrame a ser processado
         mapeamento_substituicoes (dict): Dicionário com mapeamento {operador_origem: operador_destino}
+        mapeamento_horario (list, optional): Lista de dicionários com mapeamentos por horário
     
     Returns:
         tuple: (DataFrame com substituições aplicadas, DataFrame com registro das substituições)
     """
-    if not mapeamento_substituicoes or 'Operador' not in df.columns:
+    if (not mapeamento_substituicoes and not mapeamento_horario) or 'Operador' not in df.columns:
         return df, pd.DataFrame(columns=['ID Original', 'Nome Original', 'ID Nova', 'Nome Novo', 'Registros Afetados'])
     
     # Criar uma cópia para não alterar o DataFrame original
@@ -308,16 +360,75 @@ def aplicar_substituicao_operadores(df, mapeamento_substituicoes):
     # Lista para armazenar as substituições realizadas
     substituicoes_realizadas = []
     
-    # Contar operadores antes da substituição
+    # Aplicar as substituições por horário se disponíveis e se o DataFrame tiver coluna de data/hora
+    if mapeamento_horario and 'Data' in df_modificado.columns and 'Hora' in df_modificado.columns:
+        # Criar uma cópia backup dos operadores originais
+        df_modificado['Operador_Original'] = df_modificado['Operador'].copy()
+        
+        # Para cada linha no DataFrame
+        for idx, row in df_modificado.iterrows():
+            # Tenta extrair a hora do registro
+            try:
+                if isinstance(row['Hora'], str):
+                    hora_registro = datetime.strptime(row['Hora'], '%H:%M:%S').time()
+                elif isinstance(row['Hora'], datetime.time):
+                    hora_registro = row['Hora']
+                else:
+                    continue  # Pula se não conseguir converter
+                
+                operador = row['Operador']
+                
+                # Verificar todas as regras de substituição por horário
+                for regra in mapeamento_horario:
+                    if operador == regra['operador_origem'] and \
+                       regra['hora_inicio_obj'] <= hora_registro <= regra['hora_fim_obj']:
+                        # Aplicar a substituição
+                        df_modificado.at[idx, 'Operador'] = regra['operador_destino']
+                        break
+            except Exception as e:
+                print(f"Erro ao processar substituição com horário para linha {idx}: {str(e)}")
+        
+        # Contar substituições realizadas por horário
+        substituicoes_contagem = {}
+        for idx, row in df_modificado[df_modificado['Operador'] != df_modificado['Operador_Original']].iterrows():
+            origem = row['Operador_Original']
+            destino = row['Operador']
+            chave = (origem, destino)
+            if chave in substituicoes_contagem:
+                substituicoes_contagem[chave] += 1
+            else:
+                substituicoes_contagem[chave] = 1
+        
+        # Adicionar as substituições com horário à lista de substituições realizadas
+        for (origem, destino), count in substituicoes_contagem.items():
+            id_original = origem.split(' - ')[0] if ' - ' in origem else origem
+            nome_original = origem.split(' - ')[1] if ' - ' in origem else ''
+            id_nova = destino.split(' - ')[0] if ' - ' in destino else destino
+            nome_novo = destino.split(' - ')[1] if ' - ' in destino else ''
+            
+            substituicoes_realizadas.append({
+                'ID Original': id_original,
+                'Nome Original': nome_original,
+                'ID Nova': id_nova,
+                'Nome Novo': nome_novo,
+                'Registros Afetados': count,
+                'Por Horário': True
+            })
+            print(f"Operador '{origem}' substituído por '{destino}' em {count} registros (por horário)")
+        
+        # Remover a coluna temporária
+        df_modificado.drop('Operador_Original', axis=1, inplace=True)
+    
+    # Contar operadores antes da substituição padrão
     contagem_antes = df_modificado['Operador'].value_counts()
     
-    # Aplicar as substituições
+    # Aplicar as substituições padrão (sem horário)
     df_modificado['Operador'] = df_modificado['Operador'].replace(mapeamento_substituicoes)
     
     # Contar operadores depois da substituição
     contagem_depois = df_modificado['Operador'].value_counts()
     
-    # Verificar quais operadores foram substituídos
+    # Verificar quais operadores foram substituídos pelo mapeamento padrão
     for operador_origem, operador_destino in mapeamento_substituicoes.items():
         if operador_origem in contagem_antes:
             registros_afetados = contagem_antes.get(operador_origem, 0)
@@ -333,12 +444,87 @@ def aplicar_substituicao_operadores(df, mapeamento_substituicoes):
                     'Nome Original': nome_original,
                     'ID Nova': id_nova,
                     'Nome Novo': nome_novo,
-                    'Registros Afetados': registros_afetados
+                    'Registros Afetados': registros_afetados,
+                    'Por Horário': False
                 })
                 print(f"Operador '{operador_origem}' substituído por '{operador_destino}' em {registros_afetados} registros")
     
     # Criar DataFrame com as substituições realizadas
     df_substituicoes = pd.DataFrame(substituicoes_realizadas)
+    
+    return df_modificado, df_substituicoes
+
+def aplicar_substituicao_operadores_horario(df, substituicoes_horario):
+    """
+    Aplica as substituições de operadores no DataFrame de acordo com o horário de cada registro.
+    
+    Args:
+        df (DataFrame): DataFrame a ser processado
+        substituicoes_horario (list): Lista de dicionários com mapeamentos {operador_origem, operador_destino, hora_inicio, hora_fim}
+    
+    Returns:
+        tuple: (DataFrame com substituições aplicadas, DataFrame com registro das substituições)
+    """
+    if not substituicoes_horario or 'Operador' not in df.columns or 'Hora' not in df.columns:
+        return df, pd.DataFrame(columns=['ID Original', 'Nome Original', 'ID Nova', 'Nome Novo', 'Hora', 'Registros Afetados'])
+    
+    # Criar uma cópia para não alterar o DataFrame original
+    df_modificado = df.copy()
+    
+    # Lista para armazenar as substituições realizadas
+    substituicoes_realizadas = {}
+    
+    # Garantir que a coluna Hora seja datetime
+    if df_modificado['Hora'].dtype != 'datetime64[ns]':
+        df_modificado['Hora'] = pd.to_datetime(df_modificado['Hora'], format='%H:%M:%S', errors='coerce')
+    
+    # Aplicar as substituições baseadas em horário
+    for idx, row in df_modificado.iterrows():
+        hora_registro = row['Hora'].time() if hasattr(row['Hora'], 'time') else row['Hora']
+        operador = row['Operador']
+        
+        for substituicao in substituicoes_horario:
+            operador_origem = substituicao['operador_origem']
+            operador_destino = substituicao['operador_destino']
+            hora_inicio = substituicao.get('hora_inicio_obj')
+            hora_fim = substituicao.get('hora_fim_obj')
+            
+            # Verificar se o operador corresponde e está dentro do intervalo de tempo
+            if operador == operador_origem and hora_inicio <= hora_registro <= hora_fim:
+                # Aplicar a substituição
+                df_modificado.at[idx, 'Operador'] = operador_destino
+                
+                # Registrar a substituição para o relatório
+                chave = f"{operador_origem}_{operador_destino}_{hora_inicio.strftime('%H:%M')}_{hora_fim.strftime('%H:%M')}"
+                if chave not in substituicoes_realizadas:
+                    id_original = operador_origem.split(' - ')[0] if ' - ' in operador_origem else operador_origem
+                    nome_original = operador_origem.split(' - ')[1] if ' - ' in operador_origem else ''
+                    id_nova = operador_destino.split(' - ')[0] if ' - ' in operador_destino else operador_destino
+                    nome_novo = operador_destino.split(' - ')[1] if ' - ' in operador_destino else ''
+                    
+                    substituicoes_realizadas[chave] = {
+                        'ID Original': id_original,
+                        'Nome Original': nome_original,
+                        'ID Nova': id_nova,
+                        'Nome Novo': nome_novo,
+                        'Hora Início': hora_inicio.strftime('%H:%M'),
+                        'Hora Fim': hora_fim.strftime('%H:%M'),
+                        'Registros Afetados': 1
+                    }
+                else:
+                    substituicoes_realizadas[chave]['Registros Afetados'] += 1
+                
+                # Uma vez que encontramos uma substituição, podemos parar de procurar
+                break
+    
+    # Criar DataFrame com as substituições realizadas
+    df_substituicoes = pd.DataFrame(list(substituicoes_realizadas.values()))
+    
+    # Log das substituições
+    if not df_substituicoes.empty:
+        print(f"\nSubstituições por horário aplicadas:")
+        for idx, row in df_substituicoes.iterrows():
+            print(f"  - Operador '{row['ID Original']} - {row['Nome Original']}' substituído por '{row['ID Nova']} - {row['Nome Novo']}' no horário {row['Hora Início']} - {row['Hora Fim']} em {row['Registros Afetados']} registros")
     
     return df_modificado, df_substituicoes
 
