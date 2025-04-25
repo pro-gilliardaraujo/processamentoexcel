@@ -1057,12 +1057,13 @@ def processar_arquivo(caminho_arquivo, diretorio_saida):
     
     # Carregar e aplicar substituições de operadores (manuais + automáticas)
     substituicoes = carregar_substituicoes_operadores()
+    substituicoes_horario = carregar_substituicoes_operadores_horario()
     
     # Combinar as substituições manuais com as automáticas (automáticas têm precedência)
     substituicoes_combinadas = {**substituicoes, **mapeamento_duplicados}
     
-    if substituicoes_combinadas:
-        df_base, df_substituicoes = aplicar_substituicao_operadores(df_base, substituicoes_combinadas)
+    if substituicoes_combinadas or substituicoes_horario:
+        df_base, df_substituicoes = aplicar_substituicao_operadores(df_base, substituicoes_combinadas, substituicoes_horario)
     else:
         df_substituicoes = pd.DataFrame(columns=['ID Original', 'Nome Original', 'ID Nova', 'Nome Novo', 'Registros Afetados'])
     
@@ -1325,6 +1326,57 @@ def carregar_substituicoes_operadores():
     except Exception as e:
         print(f"Erro ao carregar arquivo de substituição de operadores: {str(e)}")
         return {}
+
+def carregar_substituicoes_operadores_horario():
+    """
+    Carrega o arquivo substituiroperadores_horario.json que contém os mapeamentos 
+    de substituição de operadores com intervalos de horário.
+    
+    Returns:
+        list: Lista de dicionários com mapeamentos {operador_origem, operador_destino, hora_inicio, hora_fim}
+        ou lista vazia se o arquivo não existir ou for inválido
+    """
+    # Obter o diretório onde está o script
+    diretorio_script = os.path.dirname(os.path.abspath(__file__))
+    
+    # Diretório raiz do projeto
+    diretorio_raiz = os.path.dirname(diretorio_script)
+    
+    # Caminho para o arquivo de substituição
+    arquivo_substituicao = os.path.join(diretorio_raiz, "config", "substituiroperadores_horario.json")
+    
+    # Verificar se o arquivo existe
+    if not os.path.exists(arquivo_substituicao):
+        print(f"Arquivo de substituição de operadores com horário não encontrado: {arquivo_substituicao}")
+        return []
+    
+    try:
+        # Carregar o arquivo JSON
+        with open(arquivo_substituicao, 'r', encoding='utf-8') as f:
+            substituicoes = json.load(f)
+        
+        # Converter strings de hora para objetos datetime.time
+        for item in substituicoes:
+            if 'hora_inicio' in item and isinstance(item['hora_inicio'], str):
+                hora_str = item['hora_inicio']
+                # Adicionar segundos se não estiverem presentes
+                if len(hora_str.split(':')) == 2:
+                    hora_str += ':00'
+                item['hora_inicio_obj'] = datetime.strptime(hora_str, '%H:%M:%S').time()
+            
+            if 'hora_fim' in item and isinstance(item['hora_fim'], str):
+                hora_str = item['hora_fim']
+                # Adicionar segundos se não estiverem presentes
+                if len(hora_str.split(':')) == 2:
+                    hora_str += ':00'
+                item['hora_fim_obj'] = datetime.strptime(hora_str, '%H:%M:%S').time()
+        
+        print(f"Carregadas {len(substituicoes)} substituições de operadores com intervalos de horário.")
+        return substituicoes
+        
+    except Exception as e:
+        print(f"Erro ao carregar arquivo de substituição de operadores com horário: {str(e)}")
+        return []
 
 def aplicar_substituicao_operadores(df, mapeamento_substituicoes, mapeamento_horario=None):
     """
