@@ -70,5 +70,17 @@
   {
     "operador_origem": "75894 - DESCONHECIDO",
     "operador_destino": "758942 - CICERO LAURINDO DA SILVA"
-  }
+  },
+  {
+    "operador_origem": "63051 - NAO CADASTRADO",
+    "operador_destino": "630511 - BRUNO LEONES QUEIROZ CHAVES"
+  },
+  {
+    "operador_origem": "75894 - NAO CADASTRADO",
+    "operador_destino": "758942 - CICERO LAURINDO DA SILVA"
+  },
+  {
+    "operador_origem": "63051 - BRUNO LEONES QUEIROZ CHAVEZ",
+    "operador_destino": "630511 - BRUNO LEONES QUEIROZ CHAVES"
+  }  
 ] 
