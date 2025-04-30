@@ -188,8 +188,12 @@ def carregar_substituicoes_operadores_horario():
     de substituição de operadores com intervalos de horário.
     
     Returns:
-        list: Lista de dicionários com mapeamentos {operador_origem, operador_destino, hora_inicio, hora_fim}
-        ou lista vazia se o arquivo não existir ou for inválido
+        list: Lista de dicionários com mapeamentos 
+              {operador_origem, operador_destino, hora_inicio, hora_fim, frota_origem}
+        ou lista vazia se o arquivo não existir ou for inválido.
+        O campo frota_origem é opcional:
+        - Se presente e não vazio, a substituição é aplicada apenas a registros daquela frota específica
+        - Se ausente ou vazio, a substituição é aplicada a todos os registros do operador
     """
     # Obter o diretório onde está o script
     diretorio_script = os.path.dirname(os.path.abspath(__file__))
@@ -240,7 +244,11 @@ def aplicar_substituicao_operadores(df, mapeamento_substituicoes, mapeamento_hor
     Args:
         df (DataFrame): DataFrame a ser processado
         mapeamento_substituicoes (dict): Dicionário com mapeamento {operador_origem: operador_destino}
-        mapeamento_horario (list, optional): Lista de dicionários com mapeamentos por horário
+        mapeamento_horario (list, optional): Lista de dicionários com mapeamentos
+            {operador_origem, operador_destino, hora_inicio, hora_fim, frota_origem}.
+            O campo frota_origem é opcional:
+            - Se presente e não vazio, a substituição é aplicada apenas a registros daquela frota específica
+            - Se ausente ou vazio, a substituição é aplicada a todos os registros do operador
     
     Returns:
         tuple: (DataFrame com substituições aplicadas, DataFrame com registro das substituições)
@@ -274,8 +282,18 @@ def aplicar_substituicao_operadores(df, mapeamento_substituicoes, mapeamento_hor
                 
                 # Verificar todas as regras de substituição por horário
                 for regra in mapeamento_horario:
-                    if operador == regra['operador_origem'] and \
-                       regra['hora_inicio_obj'] <= hora_registro <= regra['hora_fim_obj']:
+                    # Verificar se a condição básica é atendida: operador de origem correto e horário dentro do intervalo
+                    condicao_basica = (operador == regra['operador_origem'] and 
+                                      regra['hora_inicio_obj'] <= hora_registro <= regra['hora_fim_obj'])
+                    
+                    # Verificar condição de frota se ela existir na regra
+                    condicao_frota = True
+                    if 'frota_origem' in regra and regra['frota_origem'] and 'Frota' in df_modificado.columns:
+                        condicao_frota = (row['Frota'] == regra['frota_origem'])
+                    # Se frota_origem não estiver definida, aplica a todos os registros do operador
+                    
+                    # Aplicar substituição apenas se ambas condições forem atendidas
+                    if condicao_basica and condicao_frota:
                         # Aplicar a substituição
                         df_modificado.at[idx, 'Operador'] = regra['operador_destino']
                         break
@@ -354,7 +372,11 @@ def aplicar_substituicao_operadores_horario(df, substituicoes_horario):
     
     Args:
         df (DataFrame): DataFrame a ser processado
-        substituicoes_horario (list): Lista de dicionários com mapeamentos {operador_origem, operador_destino, hora_inicio, hora_fim}
+        substituicoes_horario (list): Lista de dicionários com mapeamentos 
+            {operador_origem, operador_destino, hora_inicio, hora_fim, frota_origem}.
+            O campo frota_origem é opcional:
+            - Se presente e não vazio, a substituição é aplicada apenas a registros daquela frota específica
+            - Se ausente ou vazio, a substituição é aplicada a todos os registros do operador
     
     Returns:
         tuple: (DataFrame com substituições aplicadas, DataFrame com registro das substituições)
@@ -383,33 +405,28 @@ def aplicar_substituicao_operadores_horario(df, substituicoes_horario):
             hora_inicio = substituicao.get('hora_inicio_obj')
             hora_fim = substituicao.get('hora_fim_obj')
             
-            # Verificar se o operador corresponde e está dentro do intervalo de tempo
-            if operador == operador_origem and hora_inicio <= hora_registro <= hora_fim:
-                # Aplicar a substituição
-                df_modificado.at[idx, 'Operador'] = operador_destino
-                
-                # Registrar a substituição para o relatório
-                chave = f"{operador_origem}_{operador_destino}_{hora_inicio.strftime('%H:%M')}_{hora_fim.strftime('%H:%M')}"
-                if chave not in substituicoes_realizadas:
-                    id_original = operador_origem.split(' - ')[0] if ' - ' in operador_origem else operador_origem
-                    nome_original = operador_origem.split(' - ')[1] if ' - ' in operador_origem else ''
-                    id_nova = operador_destino.split(' - ')[0] if ' - ' in operador_destino else operador_destino
-                    nome_novo = operador_destino.split(' - ')[1] if ' - ' in operador_destino else ''
-                    
-                    substituicoes_realizadas[chave] = {
-                        'ID Original': id_original,
-                        'Nome Original': nome_original,
-                        'ID Nova': id_nova,
-                        'Nome Novo': nome_novo,
-                        'Hora Início': hora_inicio.strftime('%H:%M'),
-                        'Hora Fim': hora_fim.strftime('%H:%M'),
-                        'Registros Afetados': 1
-                    }
-                else:
-                    substituicoes_realizadas[chave]['Registros Afetados'] += 1
-                
-                # Uma vez que encontramos uma substituição, podemos parar de procurar
-                break
+            # Verificar se precisamos filtrar por frota
+            frota_origem = substituicao.get('frota_origem')
+            
+            # Filtra por operador e horário (e frota, se especificada)
+            mascara = (df_modificado['Operador'] == operador_origem)
+            
+            if hora_inicio and hora_fim:
+                mascara &= (df_modificado['Hora'].dt.time >= hora_inicio) & (df_modificado['Hora'].dt.time <= hora_fim)
+            
+            # Adiciona filtro de frota se especificado e a coluna existir
+            if frota_origem and 'Frota' in df_modificado.columns:
+                mascara &= (df_modificado['Frota'] == frota_origem)
+            # Se frota_origem não estiver definida, aplica a todos os registros do operador
+            
+            # Aplicar a substituição aos registros filtrados
+            df_modificado.loc[mascara, 'Operador'] = operador_destino
+            
+            # Contabilizar substituições
+            registros_afetados = mascara.sum()
+            if registros_afetados > 0:
+                chave = (operador_origem, operador_destino)
+                substituicoes_realizadas[chave] = substituicoes_realizadas.get(chave, 0) + registros_afetados
     
     # Criar DataFrame com as substituições realizadas
     df_substituicoes = pd.DataFrame(list(substituicoes_realizadas.values()))
