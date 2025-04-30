@@ -1,4 +1,5 @@
 [
+  /*
   {
     "operador_origem": "9999 - TROCA DE TURNO",
     "operador_destino": "476835 - JOSE MARIANO DE OLIVEIRA",
@@ -6,6 +7,9 @@
     "hora_fim": "10:00",
     "frota_origem": "COLHEDORA 1"
   },
+  */
+  /*
+  Abono para operador da 7031 na frente Zirleno - 30/04/2025
   {
     "operador_origem": "1 - SEM OPERADOR",
     "operador_destino": "61829 - LAILSON ANTONIO DA SILVA",
@@ -20,4 +24,5 @@
     "hora_fim": "18:30",
     "frota_origem": "7031"
   }
+  */
 ]
