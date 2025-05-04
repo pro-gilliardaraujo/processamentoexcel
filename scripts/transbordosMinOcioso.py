@@ -1168,6 +1168,60 @@ def identificar_operadores_duplicados(df, substituicoes=None):
     
     return mapeamento, df_encontradas
 
+def criar_planilha_tdh(df):
+    """
+    Cria uma planilha vazia para TDH, contendo apenas as frotas encontradas.
+    
+    Args:
+        df (DataFrame): DataFrame com os dados
+        
+    Returns:
+        DataFrame: DataFrame vazio com as colunas 'Frota' e 'TDH'
+    """
+    # Obter todas as frotas únicas
+    frotas = df['Equipamento'].unique()
+    
+    # Criar DataFrame vazio com as frotas
+    df_tdh = pd.DataFrame({'Frota': frotas, 'TDH': ''})
+    
+    return df_tdh
+
+def criar_planilha_diesel(df):
+    """
+    Cria uma planilha vazia para Diesel, contendo apenas as frotas encontradas.
+    
+    Args:
+        df (DataFrame): DataFrame com os dados
+        
+    Returns:
+        DataFrame: DataFrame vazio com as colunas 'Frota' e 'Diesel'
+    """
+    # Obter todas as frotas únicas
+    frotas = df['Equipamento'].unique()
+    
+    # Criar DataFrame vazio com as frotas
+    df_diesel = pd.DataFrame({'Frota': frotas, 'Diesel': ''})
+    
+    return df_diesel
+
+def criar_planilha_impureza(df):
+    """
+    Cria uma planilha vazia para Impureza Vegetal, contendo apenas as frotas encontradas.
+    
+    Args:
+        df (DataFrame): DataFrame com os dados
+        
+    Returns:
+        DataFrame: DataFrame vazio com as colunas 'Frota' e 'Impureza'
+    """
+    # Obter todas as frotas únicas
+    frotas = df['Equipamento'].unique()
+    
+    # Criar DataFrame vazio com as frotas
+    df_impureza = pd.DataFrame({'Frota': frotas, 'Impureza': ''})
+    
+    return df_impureza
+
 def criar_excel_com_planilhas(df_base, base_calculo, disp_mecanica, eficiencia_energetica,
                             motor_ocioso, falta_apontamento, uso_gps, horas_por_frota, caminho_saida,
                             df_duplicados=None, media_velocidade=None, df_substituicoes=None):
@@ -1190,6 +1244,11 @@ def criar_excel_com_planilhas(df_base, base_calculo, disp_mecanica, eficiencia_e
             max_length = min(max_length, 40)
             worksheet.column_dimensions[column].width = max_length
     
+    # Criar planilhas adicionais
+    df_tdh = criar_planilha_tdh(df_base)
+    df_diesel = criar_planilha_diesel(df_base)
+    df_impureza = criar_planilha_impureza(df_base)
+    
     with pd.ExcelWriter(caminho_saida, engine='openpyxl') as writer:
         # Salvar cada DataFrame em uma planilha separada
         df_base.to_excel(writer, sheet_name='BASE', index=False)
@@ -1200,6 +1259,11 @@ def criar_excel_com_planilhas(df_base, base_calculo, disp_mecanica, eficiencia_e
         falta_apontamento.to_excel(writer, sheet_name='4_Falta Apontamento', index=False)
         uso_gps.to_excel(writer, sheet_name='5_Uso GPS', index=False)
         horas_por_frota.to_excel(writer, sheet_name='Horas por Frota', index=False)
+        
+        # Adicionar novas planilhas
+        df_tdh.to_excel(writer, sheet_name='TDH', index=False)
+        df_diesel.to_excel(writer, sheet_name='Diesel', index=False)
+        df_impureza.to_excel(writer, sheet_name='Impureza Vegetal', index=False)
         
         if media_velocidade is None:
             media_velocidade = pd.DataFrame(columns=['Operador', 'Velocidade'])
@@ -1256,6 +1320,21 @@ def criar_excel_com_planilhas(df_base, base_calculo, disp_mecanica, eficiencia_e
                     for col in range(2, worksheet.max_column + 1):  # Todas as colunas de tempo
                         cell = worksheet.cell(row=row, column=col)
                         cell.number_format = '0.00'  # Formato decimal
+                        
+            elif sheet_name == 'TDH':
+                for row in range(2, worksheet.max_row + 1):
+                    cell = worksheet.cell(row=row, column=2)  # Coluna B (TDH)
+                    cell.number_format = '0.0000'  # 4 casas decimais
+            
+            elif sheet_name == 'Diesel':
+                for row in range(2, worksheet.max_row + 1):
+                    cell = worksheet.cell(row=row, column=2)  # Coluna B (Diesel)
+                    cell.number_format = '0.0000'  # 4 casas decimais
+            
+            elif sheet_name == 'Impureza Vegetal':
+                for row in range(2, worksheet.max_row + 1):
+                    cell = worksheet.cell(row=row, column=2)  # Coluna B (Impureza)
+                    cell.number_format = '0.00'  # 2 casas decimais
             
             elif sheet_name == 'Base Calculo':
                 colunas_porcentagem = ['% Parado com motor ligado', '% Utilização GPS', '% Falta de Apontamento']
@@ -1269,7 +1348,7 @@ def criar_excel_com_planilhas(df_base, base_calculo, disp_mecanica, eficiencia_e
                         if header in colunas_porcentagem:
                             cell.number_format = '0.00%'
                         elif header in colunas_tempo:
-                            cell.number_format = '0.00'  # Formato decimal
+                            cell.number_format = '0.00'
 
 def extrair_arquivo_zip(caminho_zip, pasta_destino=None):
     """

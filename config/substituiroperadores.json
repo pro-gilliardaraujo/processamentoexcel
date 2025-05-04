@@ -1,7 +1,12 @@
 [
+  /*
   {
     "operador_origem": "61829 - NAO CADASTRADO",
-    "operador_destino": "61829 - LAILSON ANTONIO DA SILVA"
+    "operador_destino": "618291 - LAILSON ANTONIO DA SILVA"
+  },
+  {
+    "operador_origem": "618291 - NAO CADASTRADO",
+    "operador_destino": "618291 - LAILSON ANTONIO DA SILVA"
   },
   {
     "operador_origem": "1331013 - GILVAN CIRIACO DA SILVA",
@@ -82,5 +87,26 @@
   {
     "operador_origem": "63051 - BRUNO LEONES QUEIROZ CHAVEZ",
     "operador_destino": "630511 - BRUNO LEONES QUEIROZ CHAVES"
-  }  
+  },
+  {
+    "operador_origem": "977542 - Ademilson matos de morais",
+    "operador_destino": "977542 - ADEMILSON MATOS DE MORAIS"
+  },
+  {
+    "operador_origem": "133472 - NAO CADASTRADO",
+    "operador_destino": "350342 - WELLINGTON OLIVEIRA DE MENEZES"
+  },
+  {
+    "operador_origem": "622631 - Jacielmo da Silva de Jesus",
+    "operador_destino": "622631 - JACIELMO DA SILVA DE JESUS"
+  },
+  {
+    "operador_origem": "139813 - JACKSON DE OLIVEIRA GOMES",
+    "operador_destino": "139813 - JACKSON DE LIMA OLIVEIRA"
+  },
+  {
+    "operador_origem": "923699 - NAO CADASTRADO",
+    "operador_destino": "923699 - COSME BORGES DA SILVA"
+  }
+  */
 ] 
