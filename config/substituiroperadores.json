@@ -1,5 +1,4 @@
 [
-  /*
   {
     "operador_origem": "61829 - NAO CADASTRADO",
     "operador_destino": "618291 - LAILSON ANTONIO DA SILVA"
@@ -107,6 +106,13 @@
   {
     "operador_origem": "923699 - NAO CADASTRADO",
     "operador_destino": "923699 - COSME BORGES DA SILVA"
+  },
+  {
+    "operador_origem": "350342 - WELLINGTON OLIVEIRA DE MENEZES",
+    "operador_destino": "350342 - WELLINGTON OLIVEIRA MENEZES"
+  },
+  {
+    "operador_origem": "802755 - NAO CADASTRADO",
+    "operador_destino": "802755 - CLAUDIO DA CONCEICAO"
   }
-  */
-] 
+]
