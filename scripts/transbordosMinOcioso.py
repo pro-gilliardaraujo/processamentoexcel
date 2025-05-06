@@ -237,134 +237,67 @@ def carregar_substituicoes_operadores_horario():
         print(f"Erro ao carregar arquivo de substituição de operadores com horário: {str(e)}")
         return []
 
-def aplicar_substituicao_operadores(df, mapeamento_substituicoes, mapeamento_horario=None):
+def aplicar_substituicao_operadores(df, base_calculo=None):
     """
-    Aplica as substituições de operadores no DataFrame.
+    Aplica as substituições de operadores conforme definido no arquivo de configuração.
+    Se base_calculo for fornecido, aplica também nesse DataFrame.
     
     Args:
         df (DataFrame): DataFrame a ser processado
-        mapeamento_substituicoes (dict): Dicionário com mapeamento {operador_origem: operador_destino}
-        mapeamento_horario (list, optional): Lista de dicionários com mapeamentos
-            {operador_origem, operador_destino, hora_inicio, hora_fim, frota_origem}.
-            O campo frota_origem é opcional:
-            - Se presente e não vazio, a substituição é aplicada apenas a registros daquela frota específica
-            - Se ausente ou vazio, a substituição é aplicada a todos os registros do operador
+        base_calculo (DataFrame, opcional): Base de cálculo a ser processada
     
     Returns:
-        tuple: (DataFrame com substituições aplicadas, DataFrame com registro das substituições)
+        tuple: (DataFrame processado, Base de cálculo processada (se fornecida))
     """
-    if (not mapeamento_substituicoes and not mapeamento_horario) or 'Operador' not in df.columns:
-        return df, pd.DataFrame(columns=['ID Original', 'Nome Original', 'ID Nova', 'Nome Novo', 'Registros Afetados'])
-    
-    # Criar uma cópia para não alterar o DataFrame original
-    df_modificado = df.copy()
-    
-    # Lista para armazenar as substituições realizadas
-    substituicoes_realizadas = []
-    
-    # Aplicar as substituições por horário se disponíveis e se o DataFrame tiver coluna de data/hora
-    if mapeamento_horario and 'Data' in df_modificado.columns and 'Hora' in df_modificado.columns:
-        # Criar uma cópia backup dos operadores originais
-        df_modificado['Operador_Original'] = df_modificado['Operador'].copy()
+    try:
+        # Carregar arquivo de configuração
+        config_path = os.path.join('config', 'substituiroperadores.json')
+        if not os.path.exists(config_path):
+            print(f"Arquivo de configuração {config_path} não encontrado. Pulando substituições.")
+            return df, base_calculo
         
-        # Para cada linha no DataFrame
-        for idx, row in df_modificado.iterrows():
-            # Tenta extrair a hora do registro
-            try:
-                if isinstance(row['Hora'], str):
-                    hora_registro = datetime.strptime(row['Hora'], '%H:%M:%S').time()
-                elif isinstance(row['Hora'], datetime.time):
-                    hora_registro = row['Hora']
-                else:
-                    continue  # Pula se não conseguir converter
-                
-                operador = row['Operador']
-                
-                # Verificar todas as regras de substituição por horário
-                for regra in mapeamento_horario:
-                    # Verificar se a condição básica é atendida: operador de origem correto e horário dentro do intervalo
-                    condicao_basica = (operador == regra['operador_origem'] and 
-                                      regra['hora_inicio_obj'] <= hora_registro <= regra['hora_fim_obj'])
-                    
-                    # Verificar condição de frota se ela existir na regra
-                    condicao_frota = True
-                    if 'frota_origem' in regra and regra['frota_origem'] and 'Frota' in df_modificado.columns:
-                        condicao_frota = (row['Frota'] == regra['frota_origem'])
-                    # Se frota_origem não estiver definida, aplica a todos os registros do operador
-                    
-                    # Aplicar substituição apenas se ambas condições forem atendidas
-                    if condicao_basica and condicao_frota:
-                        # Aplicar a substituição
-                        df_modificado.at[idx, 'Operador'] = regra['operador_destino']
-                        break
-            except Exception as e:
-                print(f"Erro ao processar substituição com horário para linha {idx}: {str(e)}")
+        with open(config_path, 'r', encoding='utf-8') as f:
+            config = json.load(f)
         
-        # Contar substituições realizadas por horário
-        substituicoes_contagem = {}
-        for idx, row in df_modificado[df_modificado['Operador'] != df_modificado['Operador_Original']].iterrows():
-            origem = row['Operador_Original']
-            destino = row['Operador']
-            chave = (origem, destino)
-            if chave in substituicoes_contagem:
-                substituicoes_contagem[chave] += 1
-            else:
-                substituicoes_contagem[chave] = 1
+        # Verificar se há substituições a serem feitas
+        if not config or not isinstance(config, list):
+            print("Nenhuma substituição de operadores configurada ou formato inválido.")
+            return df, base_calculo
         
-        # Adicionar as substituições com horário à lista de substituições realizadas
-        for (origem, destino), count in substituicoes_contagem.items():
-            id_original = origem.split(' - ')[0] if ' - ' in origem else origem
-            nome_original = origem.split(' - ')[1] if ' - ' in origem else ''
-            id_nova = destino.split(' - ')[0] if ' - ' in destino else destino
-            nome_novo = destino.split(' - ')[1] if ' - ' in destino else ''
+        print("\n=== APLICANDO SUBSTITUIÇÕES DE OPERADORES ===")
+        
+        # Criar cópia para não modificar o DataFrame original durante a iteração
+        df_copia = df.copy()
+        base_calculo_copia = base_calculo.copy() if base_calculo is not None else None
+        
+        # Aplicar cada substituição
+        for substituicao in config:
+            operador_origem = substituicao.get('operador_origem')
+            operador_destino = substituicao.get('operador_destino')
             
-            substituicoes_realizadas.append({
-                'ID Original': id_original,
-                'Nome Original': nome_original,
-                'ID Nova': id_nova,
-                'Nome Novo': nome_novo,
-                'Registros Afetados': count,
-                'Por Horário': True
-            })
-            print(f"Operador '{origem}' substituído por '{destino}' em {count} registros (por horário)")
+            if not operador_origem or not operador_destino:
+                print(f"Configuração inválida: {substituicao}")
+                continue
+            
+            # Contar quantas linhas serão afetadas (para log)
+            linhas_afetadas = len(df_copia[df_copia['Operador'] == operador_origem])
+            
+            # Aplicar no DataFrame principal
+            df_copia.loc[df_copia['Operador'] == operador_origem, 'Operador'] = operador_destino
+            
+            # Aplicar na base de cálculo, se fornecida
+            if base_calculo_copia is not None:
+                linhas_afetadas_base = len(base_calculo_copia[base_calculo_copia['Operador'] == operador_origem])
+                base_calculo_copia.loc[base_calculo_copia['Operador'] == operador_origem, 'Operador'] = operador_destino
+                print(f"Substituição aplicada: '{operador_origem}' → '{operador_destino}' ({linhas_afetadas} linhas no DF principal, {linhas_afetadas_base} linhas na Base Calculo)")
+            else:
+                print(f"Substituição aplicada: '{operador_origem}' → '{operador_destino}' ({linhas_afetadas} linhas)")
         
-        # Remover a coluna temporária
-        df_modificado.drop('Operador_Original', axis=1, inplace=True)
+        return df_copia, base_calculo_copia
     
-    # Contar operadores antes da substituição padrão
-    contagem_antes = df_modificado['Operador'].value_counts()
-    
-    # Aplicar as substituições padrão (sem horário)
-    df_modificado['Operador'] = df_modificado['Operador'].replace(mapeamento_substituicoes)
-    
-    # Contar operadores depois da substituição
-    contagem_depois = df_modificado['Operador'].value_counts()
-    
-    # Verificar quais operadores foram substituídos pelo mapeamento padrão
-    for operador_origem, operador_destino in mapeamento_substituicoes.items():
-        if operador_origem in contagem_antes:
-            registros_afetados = contagem_antes.get(operador_origem, 0)
-            if registros_afetados > 0:
-                # Extrair IDs e nomes
-                id_original = operador_origem.split(' - ')[0] if ' - ' in operador_origem else operador_origem
-                nome_original = operador_origem.split(' - ')[1] if ' - ' in operador_origem else ''
-                id_nova = operador_destino.split(' - ')[0] if ' - ' in operador_destino else operador_destino
-                nome_novo = operador_destino.split(' - ')[1] if ' - ' in operador_destino else ''
-                
-                substituicoes_realizadas.append({
-                    'ID Original': id_original,
-                    'Nome Original': nome_original,
-                    'ID Nova': id_nova,
-                    'Nome Novo': nome_novo,
-                    'Registros Afetados': registros_afetados,
-                    'Por Horário': False
-                })
-                print(f"Operador '{operador_origem}' substituído por '{operador_destino}' em {registros_afetados} registros")
-    
-    # Criar DataFrame com as substituições realizadas
-    df_substituicoes = pd.DataFrame(substituicoes_realizadas)
-    
-    return df_modificado, df_substituicoes
+    except Exception as e:
+        print(f"Erro ao aplicar substituições de operadores: {str(e)}")
+        return df, base_calculo
 
 def aplicar_substituicao_operadores_horario(df, substituicoes_horario):
     """
@@ -849,67 +782,33 @@ def calcular_horas_por_frota(df):
 
 def calcular_eficiencia_energetica(base_calculo):
     """
-    Calcula a eficiência energética por operador para transbordos.
-    Para transbordos, é calculada como Horas Produtivas / Horas Totais (corresponde ao Excel)
+    Extrai e agrega a eficiência energética por operador da tabela Base Calculo.
+    Não realiza novos cálculos, apenas agrupa os valores já calculados por operador.
     
     Args:
         base_calculo (DataFrame): Tabela Base Calculo
     
     Returns:
-        DataFrame: Eficiência energética por operador
+        DataFrame: Eficiência energética por operador (agregado)
     """
-    # Função para calcular valores com alta precisão e depois formatar
-    def calcular_porcentagem(numerador, denominador, precisao=4):
-        """Calcula porcentagem como decimal (0-1) evitando divisão por zero."""
-        if denominador > 0:
-            return round((numerador / denominador), precisao)
-        return 0.0
+    # Selecionar apenas as colunas relevantes
+    df_temp = base_calculo[['Operador', 'Horas Produtivas', 'Horas totais']].copy()
     
-    # Agrupar por operador (já filtrado pela função calcular_base_calculo)
-    agrupado = base_calculo.groupby('Operador').agg({
-        'Horas Produtivas': 'sum',
-        'Horas totais': 'sum',
-        'Equipamento': 'first',  # Mantém um equipamento para referência
-        'Grupo Equipamento/Frente': 'first'  # Mantém um grupo para referência
-    }).reset_index()
+    # Agrupar por operador e calcular a soma
+    agrupado = df_temp.groupby('Operador').sum().reset_index()
     
-    resultados = []
-    for _, row in agrupado.iterrows():
-        operador = row['Operador']
-        equipamento = row['Equipamento']
-        grupo = row['Grupo Equipamento/Frente']
-        
-        # Filtrar dados para este operador
-        dados_op = base_calculo[
-            (base_calculo['Operador'] == operador) &
-            (base_calculo['Equipamento'] == equipamento) &
-            (base_calculo['Grupo Equipamento/Frente'] == grupo)
-        ]
-        
-        # Calcular a média diária se houver mais de um dia
-        horas_produtivas = row['Horas Produtivas']
-        horas_totais = row['Horas totais']
-        
-        # Eficiência Energética para transbordos = Horas Produtivas / Horas Totais (ajustado para corresponder ao Excel)
-        eficiencia = calcular_porcentagem(horas_produtivas, horas_totais)
-        
-        # Debug para verificar valores
-        print(f"\nOperador: {operador}")
-        print(f"Horas Produtivas: {horas_produtivas:.6f}")
-        print(f"Horas Totais: {horas_totais:.6f}")
-        print(f"Eficiência: {eficiencia:.6f}")
-        print("-" * 50)
-        
-        resultados.append({
-            'Operador': operador,
-            'Eficiência': eficiencia
-        })
+    # Calcular eficiência a partir dos valores agrupados
+    agrupado['Eficiência'] = agrupado.apply(
+        lambda row: row['Horas Produtivas'] / row['Horas totais'] if row['Horas totais'] > 0 else 0,
+        axis=1
+    )
     
-    return pd.DataFrame(resultados)
+    # Retornar apenas as colunas necessárias
+    return agrupado[['Operador', 'Eficiência']]
 
 def calcular_motor_ocioso(base_calculo, df_base=None):
     """
-    Calcula o percentual de motor ocioso por operador usando os dados da Base Calculo.
+    Extrai o percentual de motor ocioso por operador da Base Calculo, sem realizar novos cálculos.
     Agrega os dados por operador, calculando a média quando um operador aparece em múltiplas frotas.
     
     Args:
@@ -919,56 +818,40 @@ def calcular_motor_ocioso(base_calculo, df_base=None):
     Returns:
         DataFrame: Percentual de motor ocioso por operador (agregado)
     """
-    # Agrupar por operador e calcular a média ponderada
-    agrupado = base_calculo.groupby('Operador').agg({
+    # Selecionar apenas as colunas relevantes
+    df_temp = base_calculo[['Operador', 'Motor Ligado', 'Parado com motor ligado', '% Parado com motor ligado']].copy()
+    
+    # Agrupar por operador
+    agrupado = df_temp.groupby('Operador').agg({
         'Motor Ligado': 'sum',
-        'Parado com motor ligado': 'sum',  # Nome correto da coluna para transbordos
-        'Equipamento': 'first',  # Mantém um equipamento para referência
-        'Grupo Equipamento/Frente': 'first'  # Mantém um grupo para referência
+        'Parado com motor ligado': 'sum',
+        '% Parado com motor ligado': 'mean'  # Média ponderada do percentual
     }).reset_index()
     
-    resultados = []
-    print("\n=== DETALHAMENTO DO CÁLCULO DE MOTOR OCIOSO (USANDO BASE CALCULO) ===")
-    print("Nota: A Base Calculo já considera as operações e grupos excluídos conforme a configuração.")
+    # Renomear as colunas para o formato esperado no relatório
+    agrupado.rename(columns={
+        '% Parado com motor ligado': 'Porcentagem',
+        'Parado com motor ligado': 'Tempo Ocioso',
+        'Motor Ligado': 'Tempo Ligado'
+    }, inplace=True)
     
-    for _, row in agrupado.iterrows():
-        operador = row['Operador']
-        equipamento = row['Equipamento']
-        grupo = row['Grupo Equipamento/Frente']
-        
-        # Filtrar dados para este operador
-        dados_op = base_calculo[
-            (base_calculo['Operador'] == operador) &
-            (base_calculo['Equipamento'] == equipamento) &
-            (base_calculo['Grupo Equipamento/Frente'] == grupo)
-        ]
-        
-        # Calcular a média diária se houver mais de um dia
-        tempo_ligado = row['Motor Ligado']
-        tempo_ocioso = row['Parado com motor ligado']  # Nome correto da coluna para transbordos
-        
-        # Calcular porcentagem
-        porcentagem = tempo_ocioso / tempo_ligado if tempo_ligado > 0 else 0
-        
-        print(f"\nOperador: {operador}")
-        print(f"Tempo Ocioso (método avançado) = {tempo_ocioso:.6f} horas")
-        print(f"Tempo Ligado = {tempo_ligado:.6f} horas")
-        print(f"Porcentagem = {porcentagem:.6f} ({porcentagem*100:.2f}%)")
+    # Colunas de saída no formato esperado
+    resultado = agrupado[['Operador', 'Porcentagem', 'Tempo Ligado', 'Tempo Ocioso']]
+    
+    print("\n=== DETALHAMENTO DO MOTOR OCIOSO (EXTRAÍDO DA BASE CALCULO) ===")
+    for _, row in resultado.iterrows():
+        print(f"\nOperador: {row['Operador']}")
+        print(f"Tempo Ocioso = {row['Tempo Ocioso']:.6f} horas")
+        print(f"Tempo Ligado = {row['Tempo Ligado']:.6f} horas")
+        print(f"Porcentagem = {row['Porcentagem']:.6f} ({row['Porcentagem']*100:.2f}%)")
         print("-" * 60)
-        
-        resultados.append({
-            'Operador': operador,
-            'Porcentagem': porcentagem,
-            'Tempo Ligado': tempo_ligado,
-            'Tempo Ocioso': tempo_ocioso
-        })
     
-    return pd.DataFrame(resultados)
+    return resultado
 
 def calcular_falta_apontamento(base_calculo):
     """
-    Calcula o percentual de falta de apontamento por operador usando os dados da Base Calculo.
-    Agrega os dados por operador, calculando a média ponderada quando um operador aparece em múltiplas frotas.
+    Extrai o percentual de falta de apontamento por operador da Base Calculo, sem realizar novos cálculos.
+    Agrega os dados por operador, calculando a média quando um operador aparece em múltiplas frotas.
     
     Args:
         base_calculo (DataFrame): Tabela Base Calculo
@@ -976,53 +859,26 @@ def calcular_falta_apontamento(base_calculo):
     Returns:
         DataFrame: Percentual de falta de apontamento por operador (agregado)
     """
-    # Agrupar por operador e calcular a média ponderada
-    agrupado = base_calculo.groupby('Operador').agg({
-        'Falta de Apontamento': 'sum',
-        'Motor Ligado': 'sum',
-        'Equipamento': 'first',  # Mantém um equipamento para referência
-        'Grupo Equipamento/Frente': 'first'  # Mantém um grupo para referência
-    }).reset_index()
+    # Selecionar apenas as colunas relevantes
+    df_temp = base_calculo[['Operador', '% Falta de Apontamento']].copy()
     
-    resultados = []
+    # Agrupar por operador e calcular a média
+    agrupado = df_temp.groupby('Operador')['% Falta de Apontamento'].mean().reset_index()
+    
+    # Renomear a coluna para o formato esperado no relatório
+    agrupado.rename(columns={'% Falta de Apontamento': 'Porcentagem'}, inplace=True)
+    
+    print("\n=== DETALHAMENTO DE FALTA DE APONTAMENTO (EXTRAÍDO DA BASE CALCULO) ===")
     for _, row in agrupado.iterrows():
-        operador = row['Operador']
-        equipamento = row['Equipamento']
-        grupo = row['Grupo Equipamento/Frente']
-        
-        # Filtrar dados para este operador
-        dados_op = base_calculo[
-            (base_calculo['Operador'] == operador) &
-            (base_calculo['Equipamento'] == equipamento) &
-            (base_calculo['Grupo Equipamento/Frente'] == grupo)
-        ]
-        
-        # Calcular a média diária se houver mais de um dia
-        falta_apontamento = row['Falta de Apontamento']
-        motor_ligado = row['Motor Ligado']
-        
-        # Calcular porcentagem
-        porcentagem = falta_apontamento / motor_ligado if motor_ligado > 0 else 0
-        
-        # Debug para verificar valores
-        print(f"Operador: {operador}")
-        print(f"Falta de Apontamento: {falta_apontamento:.6f}")
-        print(f"Motor Ligado: {motor_ligado:.6f}")
-        print(f"Porcentagem: {porcentagem:.6f}")
-        print("-" * 50)
-        
-        resultados.append({
-            'Operador': operador,
-            'Porcentagem': porcentagem
-        })
+        print(f"Operador: {row['Operador']}, Porcentagem: {row['Porcentagem']:.6f}")
+    print("-" * 60)
     
-    return pd.DataFrame(resultados)
+    return agrupado
 
 def calcular_uso_gps(base_calculo):
     """
-    Extrai o uso de GPS da Base Calculo.
-    Agrega os dados por operador, calculando a média ponderada quando um operador aparece em múltiplas frotas.
-    Os valores GPS e Horas Produtivas já foram pré-calculados na função calcular_base_calculo.
+    Extrai o percentual de uso de GPS por operador da Base Calculo, sem realizar novos cálculos.
+    Agrega os dados por operador, calculando a média quando um operador aparece em múltiplas frotas.
     
     Args:
         base_calculo (DataFrame): Tabela Base Calculo
@@ -1030,43 +886,21 @@ def calcular_uso_gps(base_calculo):
     Returns:
         DataFrame: Percentual de uso de GPS por operador (agregado)
     """
-    # Agrupar por operador e calcular a soma
-    agrupado = base_calculo.groupby('Operador').agg({
-        'GPS': 'sum',
-        'Horas Produtivas': 'sum',
-        'Equipamento': 'first',  # Mantém um equipamento para referência
-        'Grupo Equipamento/Frente': 'first'  # Mantém um grupo para referência
-    }).reset_index()
+    # Selecionar apenas as colunas relevantes
+    df_temp = base_calculo[['Operador', '% Utilização RTK']].copy()
     
-    resultados = []
+    # Agrupar por operador e calcular a média ponderada
+    agrupado = df_temp.groupby('Operador')['% Utilização RTK'].mean().reset_index()
+    
+    # Renomear a coluna para o formato esperado no relatório
+    agrupado.rename(columns={'% Utilização RTK': 'Porcentagem'}, inplace=True)
+    
+    print("\n=== DETALHAMENTO DE UTILIZAÇÃO DE GPS (EXTRAÍDO DA BASE CALCULO) ===")
     for _, row in agrupado.iterrows():
-        operador = row['Operador']
-        equipamento = row['Equipamento']
-        grupo = row['Grupo Equipamento/Frente']
-        
-        # Filtrar dados para este operador
-        dados_op = base_calculo[
-            (base_calculo['Operador'] == operador) &
-            (base_calculo['Equipamento'] == equipamento) &
-            (base_calculo['Grupo Equipamento/Frente'] == grupo)
-        ]
-        
-        # Calcular a média diária se houver mais de um dia
-        gps = row['GPS']
-        horas_produtivas = row['Horas Produtivas']
-        
-        # Calcular porcentagem (tempo com GPS ativo / tempo produtivo total)
-        porcentagem = gps / horas_produtivas if horas_produtivas > 0 else 0
-        
-        # Debug para verificar valores
-        print(f"Operador: {operador}, GPS: {gps:.4f}, Horas Produtivas: {horas_produtivas:.4f}, % GPS: {porcentagem:.4f}")
-        
-        resultados.append({
-            'Operador': operador,
-            'Porcentagem': porcentagem
-        })
+        print(f"Operador: {row['Operador']}, Porcentagem: {row['Porcentagem']:.6f}")
+    print("-" * 60)
     
-    return pd.DataFrame(resultados)
+    return agrupado
 
 def calcular_media_velocidade(df):
     """
@@ -1515,7 +1349,7 @@ def processar_todos_arquivos():
 
 def processar_arquivo(caminho_arquivo, diretorio_saida):
     """
-    Processa um único arquivo e gera o Excel de saída.
+    Processa um arquivo de transbordos e gera um arquivo Excel com as métricas calculadas.
     
     Args:
         caminho_arquivo (str): Caminho do arquivo a ser processado
@@ -1536,17 +1370,12 @@ def processar_arquivo(caminho_arquivo, diretorio_saida):
         print(f"Erro ao processar {os.path.basename(caminho_arquivo)}. Pulando para o próximo arquivo.")
         return
     
-    # Carregar substituições de operadores
-    substituicoes = carregar_substituicoes_operadores()
-    
     # Identificar operadores com IDs que começam com 133 e têm 7 dígitos
-    mapeamento_duplicados, df_duplicados = identificar_operadores_duplicados(df_base, substituicoes)
+    mapeamento_duplicados, df_duplicados = identificar_operadores_duplicados(df_base)
     
-    # Aplicar as substituições
-    if substituicoes:
-        df_base, df_substituicoes = aplicar_substituicao_operadores(df_base, substituicoes)
-    else:
-        df_substituicoes = pd.DataFrame(columns=['ID Original', 'Nome Original', 'ID Nova', 'Nome Novo', 'Registros Afetados'])
+    # Aplicar as substituições usando a nova função
+    print("\nAplicando substituições de operadores...")
+    df_base, _ = aplicar_substituicao_operadores(df_base)
     
     # Se o DataFrame estiver vazio, gerar apenas a planilha BASE
     if len(df_base) == 0:
@@ -1565,16 +1394,22 @@ def processar_arquivo(caminho_arquivo, diretorio_saida):
     # Agora calculamos a Base Calculo
     base_calculo = calcular_base_calculo(df_base_com_motor_ocioso)
     
+    # Aplicar as substituições na base_calculo também
+    _, base_calculo = aplicar_substituicao_operadores(df_base_com_motor_ocioso, base_calculo)
+    
     # Calcular as métricas auxiliares
     disp_mecanica = calcular_disponibilidade_mecanica(df_base_com_motor_ocioso)
     eficiencia_energetica = calcular_eficiencia_energetica(base_calculo)
-    motor_ocioso = calcular_motor_ocioso_novo(base_calculo)  # Agora passa a Base Calculo diretamente
+    motor_ocioso = calcular_motor_ocioso(base_calculo, df_base_com_motor_ocioso)  # Agora passa a Base Calculo diretamente
     falta_apontamento = calcular_falta_apontamento(base_calculo)
     uso_gps = calcular_uso_gps(base_calculo)
     horas_por_frota = calcular_horas_por_frota(df_base_com_motor_ocioso)
     
     # Calcular média de velocidade por operador
     media_velocidade = calcular_media_velocidade(df_base_com_motor_ocioso)
+    
+    # Criar uma tabela de substituições para logs (vazia pois já aplicamos as substituições)
+    df_substituicoes = pd.DataFrame(columns=['ID Original', 'Nome Original', 'ID Nova', 'Nome Novo', 'Registros Afetados'])
     
     # Criar o arquivo Excel com todas as planilhas
     criar_excel_com_planilhas(
