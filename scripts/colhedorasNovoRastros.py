@@ -969,6 +969,10 @@ def criar_planilha_coordenadas(df_base):
     df_coordenadas = df_coordenadas.sort_values(['Frota', 'Hora_temp'])
     df_coordenadas.drop('Hora_temp', axis=1, inplace=True)
     
+    # Garantir que as coordenadas sejam numéricas e usar ponto como separador decimal
+    df_coordenadas['Latitude'] = pd.to_numeric(df_coordenadas['Latitude'], errors='coerce')
+    df_coordenadas['Longitude'] = pd.to_numeric(df_coordenadas['Longitude'], errors='coerce')
+    
     # Remover duplicatas completas para reduzir tamanho da planilha
     df_coordenadas = df_coordenadas.drop_duplicates()
     
@@ -1007,7 +1011,7 @@ def criar_excel_com_planilhas(df_base, base_calculo, disp_mecanica, eficiencia_e
     # Criar planilha de coordenadas
     df_coordenadas = criar_planilha_coordenadas(df_base)
     
-    with pd.ExcelWriter(caminho_saida, engine='openpyxl') as writer:
+    with pd.ExcelWriter(caminho_saida, engine='openpyxl', decimal='.') as writer:
         # Salvar cada DataFrame em uma planilha separada
         df_base.to_excel(writer, sheet_name='BASE', index=False)
         base_calculo.to_excel(writer, sheet_name='Base Calculo', index=False)
@@ -1032,8 +1036,8 @@ def criar_excel_com_planilhas(df_base, base_calculo, disp_mecanica, eficiencia_e
         df_diesel.to_excel(writer, sheet_name='Diesel', index=False)
         df_impureza.to_excel(writer, sheet_name='Impureza Vegetal', index=False)
         
-        # Adicionar planilha de coordenadas
-        df_coordenadas.to_excel(writer, sheet_name='Coordenadas', index=False)
+        # Adicionar planilha de coordenadas com ponto como separador decimal
+        df_coordenadas.to_excel(writer, sheet_name='Coordenadas', index=False, float_format='%.9f')
         
         if media_velocidade is None:
             media_velocidade = pd.DataFrame(columns=['Operador', 'Velocidade'])
