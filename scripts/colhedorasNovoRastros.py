@@ -1015,7 +1015,7 @@ def criar_excel_com_planilhas(df_base, base_calculo, disp_mecanica, eficiencia_e
     # Criar planilha de coordenadas
     df_coordenadas = criar_planilha_coordenadas(df_base)
     
-    with pd.ExcelWriter(caminho_saida, engine='openpyxl', decimal='.') as writer:
+    with pd.ExcelWriter(caminho_saida, engine='openpyxl') as writer:
         # Salvar cada DataFrame em uma planilha separada
         df_base.to_excel(writer, sheet_name='BASE', index=False)
         base_calculo.to_excel(writer, sheet_name='Base Calculo', index=False)
