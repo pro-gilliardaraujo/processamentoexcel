@@ -778,9 +778,11 @@ def identificar_operadores_duplicados(df):
         if ' - ' in op:
             try:
                 id_parte, nome_parte = op.split(' - ', 1)
-                if nome_parte not in nomes_para_ids:
-                    nomes_para_ids[nome_parte] = []
-                nomes_para_ids[nome_parte].append(op)
+                # Normalizar nome para comparação (maiúsculo e sem espaços extras)
+                nome_normalizado = nome_parte.upper().strip()
+                if nome_normalizado not in nomes_para_ids:
+                    nomes_para_ids[nome_normalizado] = []
+                nomes_para_ids[nome_normalizado].append(op)
             except:
                 continue
     
@@ -790,24 +792,47 @@ def identificar_operadores_duplicados(df):
     
     for nome, ids in nomes_para_ids.items():
         if len(ids) > 1:
-            # Verificar se uma das IDs inicia com 133 e tem 7 dígitos
-            ids_longas = [id_op for id_op in ids if ' - ' in id_op and id_op.split(' - ')[0].startswith('133') and len(id_op.split(' - ')[0]) == 7]
-            ids_curtas = [id_op for id_op in ids if id_op not in ids_longas]
+            print(f"Encontrado operador duplicado: {nome} com {len(ids)} IDs diferentes")
             
-            if ids_longas and ids_curtas:
-                for id_longa in ids_longas:
-                    # Encontrar a ID correta (a mais curta)
-                    id_correta = min(ids_curtas, key=lambda x: len(x.split(' - ')[0]) if ' - ' in x else float('inf'))
+            # Separar IDs que começam com '133' e têm 7 dígitos
+            ids_suspeitas = [id_op for id_op in ids if ' - ' in id_op and id_op.split(' - ')[0].startswith('133') and len(id_op.split(' - ')[0]) == 7]
+            ids_normais = [id_op for id_op in ids if id_op not in ids_suspeitas]
+            
+            # Se temos IDs suspeitas e normais, considerar a suspeita como incorreta
+            if ids_suspeitas and ids_normais:
+                for id_suspeita in ids_suspeitas:
+                    # Usar a ID normal mais curta como destino (geralmente a correta)
+                    id_correta = min(ids_normais, key=lambda x: len(x.split(' - ')[0]) if ' - ' in x else float('inf'))
                     
                     # Adicionar ao mapeamento
-                    mapeamento[id_longa] = id_correta
+                    mapeamento[id_suspeita] = id_correta
+                    
+                    # Extrair as partes para o relatório
+                    id_incorreta_parte = id_suspeita.split(' - ')[0]
+                    id_correta_parte = id_correta.split(' - ')[0]
+                    
+                    print(f"  - Mapeando: {id_suspeita} -> {id_correta}")
                     
                     # Adicionar à lista de duplicidades para o relatório
                     duplicidades.append({
-                        'ID Incorreta': id_longa,
+                        'ID Incorreta': id_suspeita,
                         'ID Correta': id_correta,
                         'Nome': nome
                     })
+            
+            # Caso especial: todas as IDs são suspeitas ou todas são normais
+            # Neste caso, apresentamos no relatório mas não fazemos substituição automática
+            else:
+                print(f"  - Múltiplas IDs do mesmo tipo encontradas para {nome}, sem ação automática")
+                # Ainda assim, adicionar ao relatório para conhecimento
+                for i, id1 in enumerate(ids):
+                    for id2 in ids[i+1:]:
+                        duplicidades.append({
+                            'ID Incorreta': id1, 
+                            'ID Correta': id2,
+                            'Nome': nome,
+                            'Observação': "Duplicidade detectada, verificar manualmente"
+                        })
     
     print(f"Encontrados {len(duplicidades)} operadores com IDs duplicadas.")
     return mapeamento, pd.DataFrame(duplicidades)
@@ -1183,7 +1208,7 @@ def processar_arquivo(caminho_arquivo, diretorio_saida):
     # Obter apenas o nome do arquivo (sem caminho e sem extensão)
     nome_base = os.path.splitext(os.path.basename(caminho_arquivo))[0]
     
-    # Nome de saída igual ao original, mas com "-min" no final e extensão .xlsx na pasta output
+    # Nome de saída igual ao original, mas com "-rastros" no final e extensão .xlsx na pasta output
     arquivo_saida = os.path.join(diretorio_saida, f"{nome_base}-rastros.xlsx")
     
     print(f"\nProcessando arquivo: {os.path.basename(caminho_arquivo)}")
@@ -1205,18 +1230,19 @@ def processar_arquivo(caminho_arquivo, diretorio_saida):
     # Combinar as substituições manuais com as automáticas (automáticas têm precedência)
     substituicoes_combinadas = {**substituicoes, **mapeamento_duplicados}
     
+    print("\n=== APLICANDO SUBSTITUIÇÕES DE OPERADORES ===")
     if substituicoes_combinadas or substituicoes_horario:
         df_base, df_substituicoes = aplicar_substituicao_operadores(df_base, substituicoes_combinadas, substituicoes_horario)
     else:
         df_substituicoes = pd.DataFrame(columns=['ID Original', 'Nome Original', 'ID Nova', 'Nome Novo', 'Registros Afetados'])
+    print("=== FIM DAS SUBSTITUIÇÕES ===\n")
     
     # Se o DataFrame estiver vazio, gerar apenas a planilha BASE
     if len(df_base) == 0:
-        writer = pd.ExcelWriter(arquivo_saida, engine='openpyxl')
-        df_base.to_excel(writer, sheet_name='BASE', index=False)
-        if not df_duplicados.empty:
-            df_duplicados.to_excel(writer, sheet_name='IDs Duplicadas', index=False)
-        writer.close()
+        with pd.ExcelWriter(arquivo_saida, engine='openpyxl') as writer:
+            df_base.to_excel(writer, sheet_name='BASE', index=False)
+            if not df_duplicados.empty:
+                df_duplicados.to_excel(writer, sheet_name='IDs Duplicadas', index=False)
         print(f"Arquivo {arquivo_saida} gerado com apenas a planilha BASE (sem dados).")
         return
     
@@ -1229,10 +1255,12 @@ def processar_arquivo(caminho_arquivo, diretorio_saida):
         # Se não tiver Data, ordenar apenas por Equipamento e Hora
         df_base = df_base.sort_values(by=['Equipamento', 'Hora'])
     
-    # Calcular a Base Calculo
+    # Calcular a Base Calculo com os operadores já substituídos
+    print("Calculando Base Calculo com operadores consolidados...")
     base_calculo = calcular_base_calculo(df_base)
     
     # Calcular as métricas auxiliares
+    print("Calculando métricas auxiliares com operadores consolidados...")
     disp_mecanica = calcular_disponibilidade_mecanica(df_base)
     eficiencia_energetica = calcular_eficiencia_energetica(base_calculo)
     hora_elevador = calcular_hora_elevador(df_base, base_calculo)
@@ -1549,6 +1577,11 @@ def aplicar_substituicao_operadores(df, mapeamento_substituicoes, mapeamento_hor
     
     # Lista para armazenar as substituições realizadas
     substituicoes_realizadas = []
+    total_registros_substituidos = 0
+    
+    # Verificar operadores antes da substituição para relatório
+    operadores_antes = df_modificado['Operador'].unique()
+    print(f"\nOperadores antes da substituição: {len(operadores_antes)}")
     
     # Aplicar as substituições por horário se disponíveis e se o DataFrame tiver coluna de data/hora
     if mapeamento_horario and 'Data' in df_modificado.columns and 'Hora' in df_modificado.columns:
@@ -1576,8 +1609,8 @@ def aplicar_substituicao_operadores(df, mapeamento_substituicoes, mapeamento_hor
                     
                     # Verificar condição de frota se ela existir na regra
                     condicao_frota = True
-                    if 'frota_origem' in regra and regra['frota_origem'] and 'Frota' in df_modificado.columns:
-                        condicao_frota = (row['Frota'] == regra['frota_origem'])
+                    if 'frota_origem' in regra and regra['frota_origem'] and 'Equipamento' in df_modificado.columns:
+                        condicao_frota = (row['Equipamento'] == regra['frota_origem'])
                     # Caso contrário, aplica a todos os registros do operador
                     
                     # Aplicar substituição apenas se ambas condições forem atendidas
@@ -1601,6 +1634,7 @@ def aplicar_substituicao_operadores(df, mapeamento_substituicoes, mapeamento_hor
         
         # Adicionar as substituições com horário à lista de substituições realizadas
         for (origem, destino), count in substituicoes_contagem.items():
+            total_registros_substituidos += count
             id_original = origem.split(' - ')[0] if ' - ' in origem else origem
             nome_original = origem.split(' - ')[1] if ' - ' in origem else ''
             id_nova = destino.split(' - ')[0] if ' - ' in destino else destino
@@ -1619,35 +1653,40 @@ def aplicar_substituicao_operadores(df, mapeamento_substituicoes, mapeamento_hor
         # Remover a coluna temporária
         df_modificado.drop('Operador_Original', axis=1, inplace=True)
     
-    # Contar operadores antes da substituição padrão
-    contagem_antes = df_modificado['Operador'].value_counts()
+    # Contar operadores e registros antes da substituição padrão
+    contagem_antes = df_modificado['Operador'].value_counts().to_dict()
     
     # Aplicar as substituições padrão (sem horário)
-    df_modificado['Operador'] = df_modificado['Operador'].replace(mapeamento_substituicoes)
+    for origem, destino in mapeamento_substituicoes.items():
+        # Verificar se o operador de origem existe no DataFrame
+        registros_afetados = df_modificado[df_modificado['Operador'] == origem].shape[0]
+        
+        if registros_afetados > 0:
+            # Substituir o operador
+            df_modificado.loc[df_modificado['Operador'] == origem, 'Operador'] = destino
+            
+            total_registros_substituidos += registros_afetados
+            
+            # Extrair IDs e nomes
+            id_original = origem.split(' - ')[0] if ' - ' in origem else origem
+            nome_original = origem.split(' - ')[1] if ' - ' in origem else ''
+            id_nova = destino.split(' - ')[0] if ' - ' in destino else destino
+            nome_novo = destino.split(' - ')[1] if ' - ' in destino else ''
+            
+            substituicoes_realizadas.append({
+                'ID Original': id_original,
+                'Nome Original': nome_original,
+                'ID Nova': id_nova, 
+                'Nome Novo': nome_novo,
+                'Registros Afetados': registros_afetados,
+                'Por Horário': False
+            })
+            print(f"Operador '{origem}' substituído por '{destino}' em {registros_afetados} registros")
     
-    # Contar operadores depois da substituição
-    contagem_depois = df_modificado['Operador'].value_counts()
-    
-    # Verificar quais operadores foram substituídos pelo mapeamento padrão
-    for operador_origem, operador_destino in mapeamento_substituicoes.items():
-        if operador_origem in contagem_antes:
-            registros_afetados = contagem_antes.get(operador_origem, 0)
-            if registros_afetados > 0:
-                # Extrair IDs e nomes
-                id_original = operador_origem.split(' - ')[0] if ' - ' in operador_origem else operador_origem
-                nome_original = operador_origem.split(' - ')[1] if ' - ' in operador_origem else ''
-                id_nova = operador_destino.split(' - ')[0] if ' - ' in operador_destino else operador_destino
-                nome_novo = operador_destino.split(' - ')[1] if ' - ' in operador_destino else ''
-                
-                substituicoes_realizadas.append({
-                    'ID Original': id_original,
-                    'Nome Original': nome_original,
-                    'ID Nova': id_nova,
-                    'Nome Novo': nome_novo,
-                    'Registros Afetados': registros_afetados,
-                    'Por Horário': False
-                })
-                print(f"Operador '{operador_origem}' substituído por '{operador_destino}' em {registros_afetados} registros")
+    # Verificar operadores após substituição
+    operadores_depois = df_modificado['Operador'].unique()
+    print(f"Operadores após substituição: {len(operadores_depois)}")
+    print(f"Total de registros substituídos: {total_registros_substituidos}")
     
     # Criar DataFrame com as substituições realizadas
     df_substituicoes = pd.DataFrame(substituicoes_realizadas)
