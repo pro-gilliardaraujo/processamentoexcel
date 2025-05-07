@@ -969,9 +969,13 @@ def criar_planilha_coordenadas(df_base):
     df_coordenadas = df_coordenadas.sort_values(['Frota', 'Hora_temp'])
     df_coordenadas.drop('Hora_temp', axis=1, inplace=True)
     
-    # Garantir que as coordenadas sejam numéricas e usar ponto como separador decimal
+    # Garantir que as coordenadas sejam numéricas
     df_coordenadas['Latitude'] = pd.to_numeric(df_coordenadas['Latitude'], errors='coerce')
     df_coordenadas['Longitude'] = pd.to_numeric(df_coordenadas['Longitude'], errors='coerce')
+    
+    # Formatar as coordenadas como strings com ponto decimal
+    df_coordenadas['Latitude'] = df_coordenadas['Latitude'].apply(lambda x: f"{x:.9f}" if pd.notnull(x) else '')
+    df_coordenadas['Longitude'] = df_coordenadas['Longitude'].apply(lambda x: f"{x:.9f}" if pd.notnull(x) else '')
     
     # Remover duplicatas completas para reduzir tamanho da planilha
     df_coordenadas = df_coordenadas.drop_duplicates()
@@ -1036,8 +1040,8 @@ def criar_excel_com_planilhas(df_base, base_calculo, disp_mecanica, eficiencia_e
         df_diesel.to_excel(writer, sheet_name='Diesel', index=False)
         df_impureza.to_excel(writer, sheet_name='Impureza Vegetal', index=False)
         
-        # Adicionar planilha de coordenadas com ponto como separador decimal
-        df_coordenadas.to_excel(writer, sheet_name='Coordenadas', index=False, float_format='%.9f')
+        # Adicionar planilha de coordenadas
+        df_coordenadas.to_excel(writer, sheet_name='Coordenadas', index=False)
         
         if media_velocidade is None:
             media_velocidade = pd.DataFrame(columns=['Operador', 'Velocidade'])
