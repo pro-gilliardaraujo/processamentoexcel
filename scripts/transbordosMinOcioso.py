@@ -237,428 +237,146 @@ def carregar_substituicoes_operadores_horario():
         print(f"Erro ao carregar arquivo de substituição de operadores com horário: {str(e)}")
         return []
 
-def aplicar_substituicao_operadores(df, base_calculo=None):
+def aplicar_substituicao_operadores(df, mapeamento_substituicoes=None, mapeamento_horario=None):
     """
-    Aplica as substituições de operadores conforme definido no arquivo de configuração.
-    Se base_calculo for fornecido, aplica também nesse DataFrame.
+    Aplica as substituições de operadores no DataFrame.
     
     Args:
         df (DataFrame): DataFrame a ser processado
-        base_calculo (DataFrame, opcional): Base de cálculo a ser processada
-    
-    Returns:
-        tuple: (DataFrame processado, Base de cálculo processada (se fornecida))
-    """
-    try:
-        # Carregar arquivo de configuração
-        config_path = os.path.join('config', 'substituiroperadores.json')
-        if not os.path.exists(config_path):
-            print(f"Arquivo de configuração {config_path} não encontrado. Pulando substituições.")
-            return df, base_calculo
-        
-        with open(config_path, 'r', encoding='utf-8') as f:
-            config = json.load(f)
-        
-        # Verificar se há substituições a serem feitas
-        if not config or not isinstance(config, list):
-            print("Nenhuma substituição de operadores configurada ou formato inválido.")
-            return df, base_calculo
-        
-        print("\n=== APLICANDO SUBSTITUIÇÕES DE OPERADORES ===")
-        
-        # Criar cópia para não modificar o DataFrame original durante a iteração
-        df_copia = df.copy()
-        base_calculo_copia = base_calculo.copy() if base_calculo is not None else None
-        
-        # Aplicar cada substituição
-        for substituicao in config:
-            operador_origem = substituicao.get('operador_origem')
-            operador_destino = substituicao.get('operador_destino')
-            
-            if not operador_origem or not operador_destino:
-                print(f"Configuração inválida: {substituicao}")
-                continue
-            
-            # Contar quantas linhas serão afetadas (para log)
-            linhas_afetadas = len(df_copia[df_copia['Operador'] == operador_origem])
-            
-            # Aplicar no DataFrame principal
-            df_copia.loc[df_copia['Operador'] == operador_origem, 'Operador'] = operador_destino
-            
-            # Aplicar na base de cálculo, se fornecida
-            if base_calculo_copia is not None:
-                linhas_afetadas_base = len(base_calculo_copia[base_calculo_copia['Operador'] == operador_origem])
-                base_calculo_copia.loc[base_calculo_copia['Operador'] == operador_origem, 'Operador'] = operador_destino
-                print(f"Substituição aplicada: '{operador_origem}' → '{operador_destino}' ({linhas_afetadas} linhas no DF principal, {linhas_afetadas_base} linhas na Base Calculo)")
-            else:
-                print(f"Substituição aplicada: '{operador_origem}' → '{operador_destino}' ({linhas_afetadas} linhas)")
-        
-        return df_copia, base_calculo_copia
-    
-    except Exception as e:
-        print(f"Erro ao aplicar substituições de operadores: {str(e)}")
-        return df, base_calculo
-
-def aplicar_substituicao_operadores_horario(df, substituicoes_horario):
-    """
-    Aplica as substituições de operadores no DataFrame de acordo com o horário de cada registro.
-    
-    Args:
-        df (DataFrame): DataFrame a ser processado
-        substituicoes_horario (list): Lista de dicionários com mapeamentos 
-            {operador_origem, operador_destino, hora_inicio, hora_fim, frota_origem}.
-            O campo frota_origem é opcional:
-            - Se presente e não vazio, a substituição é aplicada apenas a registros daquela frota específica
-            - Se ausente ou vazio, a substituição é aplicada a todos os registros do operador
+        mapeamento_substituicoes (dict, optional): Dicionário com mapeamento {operador_origem: operador_destino}
+        mapeamento_horario (list, optional): Lista de dicionários com mapeamentos
+            {operador_origem, operador_destino, hora_inicio, hora_fim, frota_origem}
     
     Returns:
         tuple: (DataFrame com substituições aplicadas, DataFrame com registro das substituições)
     """
-    if not substituicoes_horario or 'Operador' not in df.columns or 'Hora' not in df.columns:
-        return df, pd.DataFrame(columns=['ID Original', 'Nome Original', 'ID Nova', 'Nome Novo', 'Hora', 'Registros Afetados'])
+    # Se mapeamento_substituicoes não foi fornecido, tenta carregar do arquivo
+    if mapeamento_substituicoes is None:
+        mapeamento_substituicoes = carregar_substituicoes_operadores()
+    
+    # Se mapeamento_horario não foi fornecido, tenta carregar do arquivo
+    if mapeamento_horario is None:
+        mapeamento_horario = carregar_substituicoes_operadores_horario()
+    
+    if (not mapeamento_substituicoes and not mapeamento_horario) or 'Operador' not in df.columns:
+        return df, pd.DataFrame(columns=['ID Original', 'Nome Original', 'ID Nova', 'Nome Novo', 'Registros Afetados'])
     
     # Criar uma cópia para não alterar o DataFrame original
     df_modificado = df.copy()
+    base_calculo = None
     
     # Lista para armazenar as substituições realizadas
-    substituicoes_realizadas = {}
+    substituicoes_realizadas = []
+    total_registros_substituidos = 0
     
-    # Garantir que a coluna Hora seja datetime
-    if df_modificado['Hora'].dtype != 'datetime64[ns]':
-        df_modificado['Hora'] = pd.to_datetime(df_modificado['Hora'], format='%H:%M:%S', errors='coerce')
+    # Verificar operadores antes da substituição para relatório
+    operadores_antes = df_modificado['Operador'].unique()
+    print(f"\nOperadores antes da substituição: {len(operadores_antes)}")
     
-    # Aplicar as substituições baseadas em horário
-    for idx, row in df_modificado.iterrows():
-        hora_registro = row['Hora'].time() if hasattr(row['Hora'], 'time') else row['Hora']
-        operador = row['Operador']
+    # Aplicar as substituições por horário se disponíveis e se o DataFrame tiver coluna de data/hora
+    if mapeamento_horario and 'Data' in df_modificado.columns and 'Hora' in df_modificado.columns:
+        # Criar uma cópia backup dos operadores originais
+        df_modificado['Operador_Original'] = df_modificado['Operador'].copy()
         
-        for substituicao in substituicoes_horario:
-            operador_origem = substituicao['operador_origem']
-            operador_destino = substituicao['operador_destino']
-            hora_inicio = substituicao.get('hora_inicio_obj')
-            hora_fim = substituicao.get('hora_fim_obj')
+        # Garantir que a coluna Hora seja datetime
+        if df_modificado['Hora'].dtype != 'datetime64[ns]':
+            df_modificado['Hora'] = pd.to_datetime(df_modificado['Hora'], format='%H:%M:%S', errors='coerce')
+        
+        # Para cada linha no DataFrame
+        for idx, row in df_modificado.iterrows():
+            # Tenta extrair a hora do registro
+            try:
+                hora_registro = row['Hora'].time() if hasattr(row['Hora'], 'time') else row['Hora']
+                operador = row['Operador']
+                
+                # Verificar todas as regras de substituição por horário
+                for regra in mapeamento_horario:
+                    # Verificar se a condição básica é atendida: operador de origem correto e horário dentro do intervalo
+                    condicao_basica = (operador == regra['operador_origem'] and
+                                      regra['hora_inicio_obj'] <= hora_registro <= regra['hora_fim_obj'])
+                    
+                    # Verificar condição de frota se ela existir na regra
+                    condicao_frota = True
+                    if 'frota_origem' in regra and regra['frota_origem'] and 'Equipamento' in df_modificado.columns:
+                        condicao_frota = (row['Equipamento'] == regra['frota_origem'])
+                    # Caso contrário, aplica a todos os registros do operador
+                    
+                    # Aplicar substituição apenas se ambas condições forem atendidas
+                    if condicao_basica and condicao_frota:
+                        # Aplicar a substituição
+                        df_modificado.at[idx, 'Operador'] = regra['operador_destino']
+                        break
+            except Exception as e:
+                print(f"Erro ao processar substituição com horário para linha {idx}: {str(e)}")
+        
+        # Contar substituições realizadas por horário
+        substituicoes_contagem = {}
+        for idx, row in df_modificado[df_modificado['Operador'] != df_modificado['Operador_Original']].iterrows():
+            origem = row['Operador_Original']
+            destino = row['Operador']
+            chave = (origem, destino)
+            if chave in substituicoes_contagem:
+                substituicoes_contagem[chave] += 1
+            else:
+                substituicoes_contagem[chave] = 1
+        
+        # Adicionar as substituições com horário à lista de substituições realizadas
+        for (origem, destino), count in substituicoes_contagem.items():
+            total_registros_substituidos += count
+            id_original = origem.split(' - ')[0] if ' - ' in origem else origem
+            nome_original = origem.split(' - ')[1] if ' - ' in origem else ''
+            id_nova = destino.split(' - ')[0] if ' - ' in destino else destino
+            nome_novo = destino.split(' - ')[1] if ' - ' in destino else ''
             
-            # Verificar se precisamos filtrar por frota
-            frota_origem = substituicao.get('frota_origem')
+            substituicoes_realizadas.append({
+                'ID Original': id_original,
+                'Nome Original': nome_original,
+                'ID Nova': id_nova,
+                'Nome Novo': nome_novo,
+                'Registros Afetados': count,
+                'Por Horário': True
+            })
+            print(f"Operador '{origem}' substituído por '{destino}' em {count} registros (por horário)")
+        
+        # Remover a coluna temporária
+        df_modificado.drop('Operador_Original', axis=1, inplace=True)
+    
+    # Aplicar as substituições padrão (sem horário)
+    for origem, destino in mapeamento_substituicoes.items():
+        # Verificar se o operador de origem existe no DataFrame
+        registros_afetados = df_modificado[df_modificado['Operador'] == origem].shape[0]
+        
+        if registros_afetados > 0:
+            # Substituir o operador
+            df_modificado.loc[df_modificado['Operador'] == origem, 'Operador'] = destino
             
-            # Filtra por operador e horário (e frota, se especificada)
-            mascara = (df_modificado['Operador'] == operador_origem)
+            total_registros_substituidos += registros_afetados
             
-            if hora_inicio and hora_fim:
-                mascara &= (df_modificado['Hora'].dt.time >= hora_inicio) & (df_modificado['Hora'].dt.time <= hora_fim)
+            # Extrair IDs e nomes
+            id_original = origem.split(' - ')[0] if ' - ' in origem else origem
+            nome_original = origem.split(' - ')[1] if ' - ' in origem else ''
+            id_nova = destino.split(' - ')[0] if ' - ' in destino else destino
+            nome_novo = destino.split(' - ')[1] if ' - ' in destino else ''
             
-            # Adiciona filtro de frota se especificado e a coluna existir
-            if frota_origem and 'Frota' in df_modificado.columns:
-                mascara &= (df_modificado['Frota'] == frota_origem)
-            # Se frota_origem não estiver definida, aplica a todos os registros do operador
-            
-            # Aplicar a substituição aos registros filtrados
-            df_modificado.loc[mascara, 'Operador'] = operador_destino
-            
-            # Contabilizar substituições
-            registros_afetados = mascara.sum()
-            if registros_afetados > 0:
-                chave = (operador_origem, operador_destino)
-                substituicoes_realizadas[chave] = substituicoes_realizadas.get(chave, 0) + registros_afetados
+            substituicoes_realizadas.append({
+                'ID Original': id_original,
+                'Nome Original': nome_original,
+                'ID Nova': id_nova, 
+                'Nome Novo': nome_novo,
+                'Registros Afetados': registros_afetados,
+                'Por Horário': False
+            })
+            print(f"Operador '{origem}' substituído por '{destino}' em {registros_afetados} registros")
+    
+    # Verificar operadores após substituição
+    operadores_depois = df_modificado['Operador'].unique()
+    print(f"Operadores após substituição: {len(operadores_depois)}")
+    print(f"Total de registros substituídos: {total_registros_substituidos}")
     
     # Criar DataFrame com as substituições realizadas
-    df_substituicoes = pd.DataFrame(list(substituicoes_realizadas.values()))
-    
-    # Log das substituições
-    if not df_substituicoes.empty:
-        print(f"\nSubstituições por horário aplicadas:")
-        for idx, row in df_substituicoes.iterrows():
-            print(f"  - Operador '{row['ID Original']} - {row['Nome Original']}' substituído por '{row['ID Nova']} - {row['Nome Novo']}' no horário {row['Hora Início']} - {row['Hora Fim']} em {row['Registros Afetados']} registros")
+    df_substituicoes = pd.DataFrame(substituicoes_realizadas)
     
     return df_modificado, df_substituicoes
-
-def processar_arquivo_base(caminho_arquivo):
-    """
-    Processa o arquivo TXT ou CSV de transbordos e retorna o DataFrame com as transformações necessárias.
-    Usando exatamente o mesmo método do Codigo_Base_TT.py para cálculo da Diferença_Hora.
-    
-    Args:
-        caminho_arquivo (str): Caminho do arquivo TXT ou CSV de entrada
-    
-    Returns:
-        DataFrame: DataFrame processado com todas as transformações
-    """
-    # Lista de codificações para tentar
-    codificacoes = ['utf-8', 'latin1', 'ISO-8859-1', 'cp1252']
-    
-    for codificacao in codificacoes:
-        try:
-            # Leitura do arquivo (TXT ou CSV são tratados da mesma forma se usarem separador ';')
-            df = pd.read_csv(caminho_arquivo, sep=';', encoding=codificacao)
-            print(f"Arquivo lido com sucesso usando {codificacao}! Total de linhas: {len(df)}")
-            
-            # Verificar se o DataFrame está vazio (apenas cabeçalhos sem dados)
-            if len(df) == 0:
-                print(f"O arquivo {caminho_arquivo} contém apenas cabeçalhos sem dados.")
-                # Retornar o DataFrame vazio mas com as colunas, em vez de None
-                # Garantir que todas as colunas desejadas existam
-                for col in COLUNAS_DESEJADAS:
-                    if col not in df.columns:
-                        df[col] = np.nan
-                # Reorganizar as colunas na ordem desejada
-                colunas_existentes = [col for col in COLUNAS_DESEJADAS if col in df.columns]
-                colunas_extras = [col for col in df.columns if col not in COLUNAS_DESEJADAS]
-                return df[colunas_existentes + colunas_extras]
-            
-            # Limpeza de espaços extras nos nomes das colunas
-            df.columns = df.columns.str.strip()
-            
-            # Padronizar valores da coluna Grupo Operacao
-            if 'Grupo Operacao' in df.columns:
-                df['Grupo Operacao'] = df['Grupo Operacao'].str.strip()
-                # Mapear valores para garantir consistência
-                mapa_grupo_operacao = {
-                    'SEM APONTAMENTO': 'Sem Apontamento',
-                    'PRODUTIVA': 'Produtiva',
-                    'MANUTENCAO': 'Manutenção',
-                    'MANUTENÇÃO': 'Manutenção'
-                }
-                df['Grupo Operacao'] = df['Grupo Operacao'].replace(mapa_grupo_operacao)
-            
-            # Verificar se 'Data/Hora' existe, caso ainda não tenha sido separado
-            if 'Data/Hora' in df.columns:
-                df[['Data', 'Hora']] = df['Data/Hora'].str.split(' ', expand=True)
-                df = df.drop(columns=['Data/Hora'])
-            
-            # Remover colunas conforme solicitado no Codigo_Base_TT.py
-            colunas_remover = ['Unidade', 'Centro de Custo', 'Fazenda', 'Zona', 'Talhao']
-            df = df.drop(columns=colunas_remover, errors='ignore')
-            
-            # MÉTODO EXATO DO Codigo_Base_TT.py para cálculo da Diferença_Hora para garantir mesmos resultados
-            # Conversão de Hora para datetime (apenas se ainda não for)
-            if df['Hora'].dtype != 'datetime64[ns]':
-                df['Hora'] = pd.to_datetime(df['Hora'], format='%H:%M:%S', errors='coerce')
-            
-            # Calcular Diferença_Hora sem arredondamentos usando o método EXATO do Codigo_Base_TT.py
-            # NOTA: Removida a regra que zerava valores > 0.5, pois não existe no Codigo_Base_TT.py
-            # e estava causando perda de aproximadamente 16 horas no total
-            df['Diferença_Hora'] = pd.to_datetime(df['Hora'], format='%H:%M:%S').diff()
-            df['Diferença_Hora'] = pd.to_timedelta(df['Diferença_Hora'], errors='coerce')
-            df['Diferença_Hora'] = df['Diferença_Hora'].dt.total_seconds() / 3600  # Conversor para horas
-            df['Diferença_Hora'] = df['Diferença_Hora'].apply(lambda x: x if x >= 0 else 0)
-            
-            # Soma total para verificação de precisão (mesma lógica do Codigo_Base_TT.py)
-            print(f"Diferença_Hora calculada usando método exato do Codigo_Base_TT.py. Soma total: {df['Diferença_Hora'].sum():.8f} horas")
-            
-            # Conversão de Motor Ligado para formato conforme Codigo_Base_TT.py
-            for col in ['Motor Ligado']:
-                if col in df.columns:
-                    df[col] = df[col].replace({1: 'LIGADO', 0: 'DESLIGADO'})
-            
-            # Criar a coluna "Parado com motor ligado" exatamente como no Codigo_Base_TT.py
-            df['Parado com motor ligado'] = ((df['Velocidade'] == 0) & (df['Motor Ligado'] == 'LIGADO')).astype(int)
-            
-            # Verifica se Horas Produtivas já existe, senão calcula usando método do Codigo_Base_TT.py
-            if 'Horas Produtivas' not in df.columns or df['Horas Produtivas'].isna().any():
-                # Calcular horas produtivas sem arredondamento, mantendo a precisão completa
-                df['Horas Produtivas'] = df.apply(
-                    lambda row: row['Diferença_Hora'] if row['Grupo Operacao'] == 'Produtiva' else 0,
-                    axis=1
-                )
-                # Soma total de horas produtivas para verificação
-                print(f"Total de horas produtivas: {df['Horas Produtivas'].sum():.8f}")
-            else:
-                # Limpa e converte para número
-                df['Horas Produtivas'] = pd.to_numeric(df['Horas Produtivas'].astype(str).str.strip(), errors='coerce')
-                df['Horas Produtivas'] = df['Horas Produtivas'].fillna(0)
-            
-            # Coluna de GPS - Para transbordos, vamos considerar GPS quando houver "RTK (Piloto Automatico)" 
-            # e Velocidade > 0 (se a coluna existir)
-            if 'RTK (Piloto Automatico)' in df.columns:
-                # Primeiro, garantir que RTK seja convertido para valores numéricos (1/0)
-                df['RTK (Piloto Automatico)'] = df['RTK (Piloto Automatico)'].apply(lambda x: 
-                    1 if (isinstance(x, bool) and x) or 
-                         (isinstance(x, (int, float)) and x == 1) or
-                         (isinstance(x, str) and str(x).upper().strip() in ['1', 'SIM', 'S', 'VERDADEIRO', 'TRUE', 'LIGADO'])
-                    else 0
-                )
-                
-                # Verificar se a coluna GPS já existe e tem valores
-                if 'GPS' not in df.columns or df['GPS'].isna().all() or (df['GPS'] == 0).all():
-                    print("Calculando coluna GPS com base em RTK (Piloto Automático)...")
-                    # Agora aplicar a lógica de GPS usando o RTK normalizado
-                    df['GPS'] = df.apply(
-                        lambda row: row['Diferença_Hora'] if row['RTK (Piloto Automatico)'] == 1 
-                        and row['Velocidade'] > 0 and row['Grupo Operacao'] == 'Produtiva' else 0,
-                        axis=1
-                    )
-                else:
-                    print("Coluna GPS já existe com valores. Mantendo os valores originais.")
-                    
-                # Verificar o total de horas com GPS ativo
-                total_gps = df['GPS'].sum()
-                print(f"Total de horas com GPS ativo: {total_gps:.4f}")
-            else:
-                # Se não tiver a coluna RTK, criar uma coluna GPS zerada
-                df['GPS'] = 0
-                print("Coluna RTK (Piloto Automatico) não encontrada. GPS definido como zero.")
-            
-            # Conversão de colunas binárias para valores numéricos (garantindo que sejam números)
-            for col in ['Esteira Ligada', 'Field Cruiser', 'Implemento Ligado']:  # RTK já foi tratado acima
-                if col in df.columns and col != 'Motor Ligado':  # Motor Ligado já foi tratado acima
-                    # Se a coluna for texto (LIGADO/DESLIGADO), converter para 1/0
-                    if df[col].dtype == 'object':
-                        df[col] = df[col].replace({'LIGADO': 1, 'DESLIGADO': 0})
-                    df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0).astype(int)
-            
-            # Limpeza e organização das colunas
-            df = df.drop(columns=COLUNAS_REMOVER, errors='ignore')
-            
-            # Garantir que todas as colunas desejadas existam
-            for col in COLUNAS_DESEJADAS:
-                if col not in df.columns:
-                    df[col] = np.nan
-            
-            # Reorganizar as colunas na ordem desejada
-            colunas_existentes = [col for col in COLUNAS_DESEJADAS if col in df.columns]
-            colunas_extras = [col for col in df.columns if col not in COLUNAS_DESEJADAS]
-            df = df[colunas_existentes + colunas_extras]
-            
-            return df
-            
-        except UnicodeDecodeError:
-            print(f"Tentativa com codificação {codificacao} falhou, tentando próxima codificação...")
-            continue
-        except Exception as e:
-            print(f"Erro ao processar o arquivo com codificação {codificacao}: {str(e)}")
-            continue
-    
-    # Se chegou aqui, todas as tentativas de codificação falharam
-    print(f"Erro: Não foi possível ler o arquivo {caminho_arquivo} com nenhuma das codificações tentadas.")
-    return None
-
-def calcular_base_calculo(df):
-    """
-    Calcula a tabela de Base Calculo a partir do DataFrame processado.
-    Calcula médias diárias considerando os dias efetivos de trabalho de cada operador.
-    
-    Cálculos principais:
-    - Horas totais: soma de Diferença_Hora
-    - Motor Ligado: soma de Diferença_Hora onde Motor Ligado = LIGADO
-    - Parado com motor ligado: usa os valores da coluna Motor Ocioso que foi preenchida pelo novo algoritmo
-    - GPS: soma de Diferença_Hora onde RTK = 1
-    
-    Args:
-        df (DataFrame): DataFrame processado com a coluna Motor Ocioso já preenchida
-    
-    Returns:
-        DataFrame: Tabela Base Calculo com todas as métricas calculadas
-    """
-    # Detectar número de dias totais nos dados (apenas para informação)
-    dias_unicos_total = df['Data'].nunique() if 'Data' in df.columns else 1
-    print(f"Detectados {dias_unicos_total} dias distintos na base de dados.")
-    
-    # Extrair combinações únicas de Equipamento, Grupo Equipamento/Frente e Operador
-    combinacoes = df[['Equipamento', 'Grupo Equipamento/Frente', 'Operador']].drop_duplicates().reset_index(drop=True)
-    
-    # Filtrar operadores excluídos
-    combinacoes = combinacoes[~combinacoes['Operador'].isin(OPERADORES_EXCLUIR)]
-    
-    # Inicializar as colunas de métricas
-    resultados = []
-    
-    # Função para calcular valores com alta precisão e depois formatar
-    def calcular_porcentagem(numerador, denominador, precisao=4):
-        """Calcula porcentagem como decimal (0-1) evitando divisão por zero."""
-        if denominador > 0:
-            return round((numerador / denominador), precisao)
-        return 0.0
-    
-    # Calcular as métricas para cada combinação
-    for idx, row in combinacoes.iterrows():
-        equipamento = row['Equipamento']
-        grupo = row['Grupo Equipamento/Frente']
-        operador = row['Operador']
-        
-        # Filtrar dados para esta combinação
-        filtro = (df['Equipamento'] == equipamento) & \
-                (df['Grupo Equipamento/Frente'] == grupo) & \
-                (df['Operador'] == operador)
-        
-        dados_filtrados = df[filtro]
-        
-        # Determinar o número de dias efetivos para este operador
-        dias_operador = dados_filtrados['Data'].nunique() if 'Data' in dados_filtrados.columns else 1
-        
-        # Horas totais - soma de Diferença_Hora
-        horas_totais = dados_filtrados['Diferença_Hora'].sum()
-        if dias_operador > 1:
-            horas_totais = horas_totais / dias_operador
-        
-        # Motor Ligado - soma de Diferença_Hora onde Motor Ligado = LIGADO
-        motor_ligado = dados_filtrados[
-            dados_filtrados['Motor Ligado'] == 'LIGADO'
-        ]['Diferença_Hora'].sum()
-        if dias_operador > 1:
-            motor_ligado = motor_ligado / dias_operador
-        
-        # Parado com motor ligado - usa os valores da coluna Motor Ocioso calculados pelo novo algoritmo
-        parado_motor_ligado = dados_filtrados['Motor Ocioso'].sum()
-        if dias_operador > 1:
-            parado_motor_ligado = parado_motor_ligado / dias_operador
-        
-        # % Parado com motor ligado (em decimal 0-1)
-        percent_parado_motor = calcular_porcentagem(parado_motor_ligado, motor_ligado)
-        
-        # GPS - Nesse ponto RTK já foi convertido para 1/0
-        # Soma de Diferença_Hora para registros produtivos com RTK=1 e velocidade>0
-        gps = dados_filtrados[
-            (dados_filtrados['RTK (Piloto Automatico)'] == 1) &
-            (dados_filtrados['Velocidade'] > 0) &
-            (dados_filtrados['Grupo Operacao'] == 'Produtiva')
-        ]['Diferença_Hora'].sum()
-        if dias_operador > 1:
-            gps = gps / dias_operador
-        
-        # Horas Produtivas
-        horas_produtivas = dados_filtrados[
-            dados_filtrados['Grupo Operacao'] == 'Produtiva'
-        ]['Diferença_Hora'].sum()
-        if dias_operador > 1:
-            horas_produtivas = horas_produtivas / dias_operador
-        
-        # % Utilização GPS (em decimal 0-1)
-        utilizacao_gps = calcular_porcentagem(gps, horas_produtivas)
-        
-        # Falta de Apontamento - soma de Diferença_Hora onde Operacao = '8340 - FALTA DE APONTAMENTO'
-        falta_apontamento = dados_filtrados[
-            dados_filtrados['Operacao'] == '8340 - FALTA DE APONTAMENTO'
-        ]['Diferença_Hora'].sum()
-        if dias_operador > 1:
-            falta_apontamento = falta_apontamento / dias_operador
-        
-        # % Falta de Apontamento (em decimal 0-1)
-        percent_falta_apontamento = calcular_porcentagem(falta_apontamento, motor_ligado)
-        
-        # Debug para verificar os valores
-        print(f"\nOperador: {operador} em {equipamento}")
-        print(f"Motor Ligado: {motor_ligado:.6f}")
-        print(f"Motor Ocioso (novo cálculo): {parado_motor_ligado:.6f}")
-        print(f"% Parado com motor ligado: {percent_parado_motor:.6f}")
-        print(f"Falta de Apontamento: {falta_apontamento:.6f}")
-        print(f"% Falta de Apontamento: {percent_falta_apontamento:.6f}")
-        
-        resultados.append({
-            'Equipamento': equipamento,
-            'Grupo Equipamento/Frente': grupo,
-            'Operador': operador,
-            'Horas totais': horas_totais,
-            'Motor Ligado': motor_ligado,
-            'Parado com motor ligado': parado_motor_ligado,
-            '% Parado com motor ligado': percent_parado_motor,
-            'GPS': gps,
-            'Horas Produtivas': horas_produtivas,
-            '% Utilização GPS': utilizacao_gps,
-            'Falta de Apontamento': falta_apontamento,
-            '% Falta de Apontamento': percent_falta_apontamento
-        })
-    
-    return pd.DataFrame(resultados)
 
 def calcular_disponibilidade_mecanica(df):
     """
@@ -1371,11 +1089,18 @@ def processar_arquivo(caminho_arquivo, diretorio_saida):
         return
     
     # Identificar operadores com IDs que começam com 133 e têm 7 dígitos
-    mapeamento_duplicados, df_duplicados = identificar_operadores_duplicados(df_base)
+    mapeamento_substituicoes = carregar_substituicoes_operadores()
+    mapeamento_duplicados, df_duplicados = identificar_operadores_duplicados(df_base, mapeamento_substituicoes)
+    
+    # Combinar mapeamentos de substituição
+    mapeamento_completo = {**mapeamento_substituicoes, **mapeamento_duplicados}
+    
+    # Carregar substituições baseadas em horário
+    mapeamento_horario = carregar_substituicoes_operadores_horario()
     
     # Aplicar as substituições usando a nova função
     print("\nAplicando substituições de operadores...")
-    df_base, _ = aplicar_substituicao_operadores(df_base)
+    df_base, df_substituicoes = aplicar_substituicao_operadores(df_base, mapeamento_completo, mapeamento_horario)
     
     # Se o DataFrame estiver vazio, gerar apenas a planilha BASE
     if len(df_base) == 0:
@@ -1394,22 +1119,16 @@ def processar_arquivo(caminho_arquivo, diretorio_saida):
     # Agora calculamos a Base Calculo
     base_calculo = calcular_base_calculo(df_base_com_motor_ocioso)
     
-    # Aplicar as substituições na base_calculo também
-    _, base_calculo = aplicar_substituicao_operadores(df_base_com_motor_ocioso, base_calculo)
-    
     # Calcular as métricas auxiliares
     disp_mecanica = calcular_disponibilidade_mecanica(df_base_com_motor_ocioso)
     eficiencia_energetica = calcular_eficiencia_energetica(base_calculo)
-    motor_ocioso = calcular_motor_ocioso(base_calculo, df_base_com_motor_ocioso)  # Agora passa a Base Calculo diretamente
+    motor_ocioso = calcular_motor_ocioso(base_calculo, df_base_com_motor_ocioso)
     falta_apontamento = calcular_falta_apontamento(base_calculo)
     uso_gps = calcular_uso_gps(base_calculo)
     horas_por_frota = calcular_horas_por_frota(df_base_com_motor_ocioso)
     
     # Calcular média de velocidade por operador
     media_velocidade = calcular_media_velocidade(df_base_com_motor_ocioso)
-    
-    # Criar uma tabela de substituições para logs (vazia pois já aplicamos as substituições)
-    df_substituicoes = pd.DataFrame(columns=['ID Original', 'Nome Original', 'ID Nova', 'Nome Novo', 'Registros Afetados'])
     
     # Criar o arquivo Excel com todas as planilhas
     criar_excel_com_planilhas(

@@ -1485,6 +1485,11 @@ def aplicar_substituicao_operadores(df, mapeamento_substituicoes, mapeamento_hor
     
     # Lista para armazenar as substituições realizadas
     substituicoes_realizadas = []
+    total_registros_substituidos = 0
+    
+    # Verificar operadores antes da substituição para relatório
+    operadores_antes = df_modificado['Operador'].unique()
+    print(f"\nOperadores antes da substituição: {len(operadores_antes)}")
     
     # Aplicar as substituições por horário se disponíveis e se o DataFrame tiver coluna de data/hora
     if mapeamento_horario and 'Data' in df_modificado.columns and 'Hora' in df_modificado.columns:
@@ -1512,8 +1517,8 @@ def aplicar_substituicao_operadores(df, mapeamento_substituicoes, mapeamento_hor
                     
                     # Verificar condição de frota se ela existir na regra
                     condicao_frota = True
-                    if 'frota_origem' in regra and regra['frota_origem'] and 'Frota' in df_modificado.columns:
-                        condicao_frota = (row['Frota'] == regra['frota_origem'])
+                    if 'frota_origem' in regra and regra['frota_origem'] and 'Equipamento' in df_modificado.columns:
+                        condicao_frota = (row['Equipamento'] == regra['frota_origem'])
                     # Caso contrário, aplica a todos os registros do operador
                     
                     # Aplicar substituição apenas se ambas condições forem atendidas
@@ -1537,6 +1542,7 @@ def aplicar_substituicao_operadores(df, mapeamento_substituicoes, mapeamento_hor
         
         # Adicionar as substituições com horário à lista de substituições realizadas
         for (origem, destino), count in substituicoes_contagem.items():
+            total_registros_substituidos += count
             id_original = origem.split(' - ')[0] if ' - ' in origem else origem
             nome_original = origem.split(' - ')[1] if ' - ' in origem else ''
             id_nova = destino.split(' - ')[0] if ' - ' in destino else destino
@@ -1555,35 +1561,40 @@ def aplicar_substituicao_operadores(df, mapeamento_substituicoes, mapeamento_hor
         # Remover a coluna temporária
         df_modificado.drop('Operador_Original', axis=1, inplace=True)
     
-    # Contar operadores antes da substituição padrão
-    contagem_antes = df_modificado['Operador'].value_counts()
+    # Contar operadores e registros antes da substituição padrão
+    contagem_antes = df_modificado['Operador'].value_counts().to_dict()
     
     # Aplicar as substituições padrão (sem horário)
-    df_modificado['Operador'] = df_modificado['Operador'].replace(mapeamento_substituicoes)
+    for origem, destino in mapeamento_substituicoes.items():
+        # Verificar se o operador de origem existe no DataFrame
+        registros_afetados = df_modificado[df_modificado['Operador'] == origem].shape[0]
+        
+        if registros_afetados > 0:
+            # Substituir o operador
+            df_modificado.loc[df_modificado['Operador'] == origem, 'Operador'] = destino
+            
+            total_registros_substituidos += registros_afetados
+            
+            # Extrair IDs e nomes
+            id_original = origem.split(' - ')[0] if ' - ' in origem else origem
+            nome_original = origem.split(' - ')[1] if ' - ' in origem else ''
+            id_nova = destino.split(' - ')[0] if ' - ' in destino else destino
+            nome_novo = destino.split(' - ')[1] if ' - ' in destino else ''
+            
+            substituicoes_realizadas.append({
+                'ID Original': id_original,
+                'Nome Original': nome_original,
+                'ID Nova': id_nova, 
+                'Nome Novo': nome_novo,
+                'Registros Afetados': registros_afetados,
+                'Por Horário': False
+            })
+            print(f"Operador '{origem}' substituído por '{destino}' em {registros_afetados} registros")
     
-    # Contar operadores depois da substituição
-    contagem_depois = df_modificado['Operador'].value_counts()
-    
-    # Verificar quais operadores foram substituídos pelo mapeamento padrão
-    for operador_origem, operador_destino in mapeamento_substituicoes.items():
-        if operador_origem in contagem_antes:
-            registros_afetados = contagem_antes.get(operador_origem, 0)
-            if registros_afetados > 0:
-                # Extrair IDs e nomes
-                id_original = operador_origem.split(' - ')[0] if ' - ' in operador_origem else operador_origem
-                nome_original = operador_origem.split(' - ')[1] if ' - ' in operador_origem else ''
-                id_nova = operador_destino.split(' - ')[0] if ' - ' in operador_destino else operador_destino
-                nome_novo = operador_destino.split(' - ')[1] if ' - ' in operador_destino else ''
-                
-                substituicoes_realizadas.append({
-                    'ID Original': id_original,
-                    'Nome Original': nome_original,
-                    'ID Nova': id_nova,
-                    'Nome Novo': nome_novo,
-                    'Registros Afetados': registros_afetados,
-                    'Por Horário': False
-                })
-                print(f"Operador '{operador_origem}' substituído por '{operador_destino}' em {registros_afetados} registros")
+    # Verificar operadores após substituição
+    operadores_depois = df_modificado['Operador'].unique()
+    print(f"Operadores após substituição: {len(operadores_depois)}")
+    print(f"Total de registros substituídos: {total_registros_substituidos}")
     
     # Criar DataFrame com as substituições realizadas
     df_substituicoes = pd.DataFrame(substituicoes_realizadas)
