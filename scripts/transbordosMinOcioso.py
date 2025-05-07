@@ -887,13 +887,13 @@ def calcular_uso_gps(base_calculo):
         DataFrame: Percentual de uso de GPS por operador (agregado)
     """
     # Selecionar apenas as colunas relevantes
-    df_temp = base_calculo[['Operador', '% Utilização RTK']].copy()
+    df_temp = base_calculo[['Operador', '% Utilização GPS']].copy()
     
     # Agrupar por operador e calcular a média ponderada
-    agrupado = df_temp.groupby('Operador')['% Utilização RTK'].mean().reset_index()
+    agrupado = df_temp.groupby('Operador')['% Utilização GPS'].mean().reset_index()
     
     # Renomear a coluna para o formato esperado no relatório
-    agrupado.rename(columns={'% Utilização RTK': 'Porcentagem'}, inplace=True)
+    agrupado.rename(columns={'% Utilização GPS': 'Porcentagem'}, inplace=True)
     
     print("\n=== DETALHAMENTO DE UTILIZAÇÃO DE GPS (EXTRAÍDO DA BASE CALCULO) ===")
     for _, row in agrupado.iterrows():
