@@ -1190,125 +1190,405 @@ def salvar_planilha_base(df, caminho_saida):
 
 def calcular_motor_ocioso_para_base(df):
     """
-    Calcula o tempo de motor ocioso de acordo com as novas regras e modifica o DataFrame original.
-    Esta função MODIFICA o DataFrame passado, adicionando a coluna 'Motor Ocioso'.
-    Considera as configurações de exclusão de operações e grupos de operação do arquivo de configuração.
+    Calcula o tempo de motor ocioso para cada registro no DataFrame original.
+    Esta função é diferente de calcular_motor_ocioso_novo, pois processa os dados brutos,
+    enquanto calcular_motor_ocioso_novo processa os dados já agregados na Base Calculo.
     
     Args:
-        df (DataFrame): DataFrame com os dados de operação
+        df (DataFrame): DataFrame original com os dados de operação
         
     Returns:
-        DataFrame: DataFrame modificado com a coluna 'Motor Ocioso' atualizada
+        DataFrame: DataFrame modificado com a coluna 'Motor Ocioso' preenchida
     """
-    # Carregar configurações de cálculos
-    config = carregar_config_calculos()
-    tipo_equipamento = "TT"  # Para transbordos
+    # Verificar se as colunas necessárias existem
+    colunas_necessarias = ['Equipamento', 'Estado', 'Motor Ligado']
+    for coluna in colunas_necessarias:
+        if coluna not in df.columns:
+            print(f"AVISO: Coluna {coluna} não encontrada. Adicionando com valores padrão.")
+            if coluna == 'Motor Ligado':
+                # Para transbordos, assumir que o motor está sempre ligado
+                df[coluna] = 'LIGADO'
+            else:
+                df[coluna] = 'Desconhecido'
     
-    # Obter operações e grupos excluídos da configuração
-    operacoes_excluidas = []
-    grupos_operacao_excluidos = []
+    # Inicializar coluna de Motor Ocioso se não existir
+    if 'Motor Ocioso' not in df.columns:
+        df['Motor Ocioso'] = 0
     
-    if tipo_equipamento in config and "motor_ocioso" in config[tipo_equipamento]:
-        operacoes_excluidas = config[tipo_equipamento]["motor_ocioso"].get("operacoes_excluidas", [])
-        grupos_operacao_excluidos = config[tipo_equipamento]["motor_ocioso"].get("grupos_operacao_excluidos", [])
+    # Para transbordos, consideramos motor ocioso quando:
+    # 1. O motor está ligado (Motor Ligado = 'LIGADO')
+    # 2. O veículo está parado (Estado = 'Parado')
+    # 3. O tempo ocioso por registro é a Diferença_Hora correspondente
     
-    print(f"Operações excluídas do cálculo de motor ocioso: {operacoes_excluidas}")
-    print(f"Grupos de operação excluídos do cálculo de motor ocioso: {grupos_operacao_excluidos}")
+    # Verificar se possuímos a coluna Diferença_Hora
+    if 'Diferença_Hora' not in df.columns:
+        print("AVISO: Coluna Diferença_Hora não encontrada. Usando valor padrão.")
+        df['Diferença_Hora'] = 0.5  # 30 minutos por padrão
     
-    # Criar uma cópia para modificar
-    df_resultado = df.copy()
+    # Aplicar a regra de cálculo para cada registro
+    df['Motor Ocioso'] = df.apply(
+        lambda row: row['Diferença_Hora'] if row['Estado'] == 'Parado' and row['Motor Ligado'] == 'LIGADO' else 0,
+        axis=1
+    )
     
-    # Converter a coluna de diferença para minutos
-    df_resultado['Diferença_Minutos'] = df_resultado['Diferença_Hora'] * 60
+    # Garantir que o tempo de motor ocioso nunca seja maior que o tempo total
+    df['Motor Ocioso'] = df.apply(
+        lambda row: min(row['Motor Ocioso'], row['Diferença_Hora']),
+        axis=1
+    )
     
-    # Inicializar colunas
-    df_resultado['Motor Ocioso'] = 0
-    df_resultado['Em_Intervalo'] = False
-    df_resultado['Soma_Intervalo'] = 0
+    print(f"Cálculo de Motor Ocioso concluído. Total de horas ociosas: {df['Motor Ocioso'].sum():.2f}")
     
-    # Filtrar operações e grupos de operação excluídos
-    df_filtrado_config = df_resultado.copy()
-    if operacoes_excluidas:
-        df_filtrado_config = df_filtrado_config[~df_filtrado_config['Operacao'].isin(operacoes_excluidas)]
-    if grupos_operacao_excluidos:
-        df_filtrado_config = df_filtrado_config[~df_filtrado_config['Grupo Operacao'].isin(grupos_operacao_excluidos)]
+    return df
+
+def processar_arquivo_base(caminho_arquivo):
+    """
+    Processa um arquivo base (TXT ou CSV) e retorna um DataFrame pandas formatado.
     
-    print(f"Total de registros antes da filtragem: {len(df_resultado)}")
-    print(f"Total de registros após filtragem por operações e grupos excluídos: {len(df_filtrado_config)}")
-    
-    # Variáveis para controle do intervalo atual
-    em_intervalo = False
-    soma_intervalo = 0
-    inicio_intervalo = None
-    
-    # Iterar sobre as linhas do DataFrame filtrado
-    for i, row in df_filtrado_config.iterrows():
-        parada_motor = row['Parado com motor ligado']
-        diferenca = row['Diferença_Minutos']
+    Args:
+        caminho_arquivo (str): Caminho para o arquivo a ser processado
         
-        # Se não estamos em um intervalo
-        if not em_intervalo:
-            # Se encontrar Parado com Motor Ligado = 1, inicia novo intervalo
-            if parada_motor == 1:
-                em_intervalo = True
-                soma_intervalo = diferenca
-                inicio_intervalo = i
-                df_resultado.at[i, 'Em_Intervalo'] = True
-                df_resultado.at[i, 'Soma_Intervalo'] = soma_intervalo
+    Returns:
+        DataFrame: DataFrame pandas com os dados processados ou None em caso de erro
+    """
+    try:
+        print(f"Lendo arquivo: {os.path.basename(caminho_arquivo)}")
         
-        # Se estamos em um intervalo
-        else:
-            # Se encontrar Parado com Motor Ligado = 0
-            if parada_motor == 0:
-                # Se a duração for > 1 minuto, fecha o intervalo
-                if diferenca > 1:
-                    # Se o total acumulado > 1 minuto, subtrai 1 minuto
-                    if soma_intervalo > 1:
-                        tempo_ocioso = soma_intervalo - 1
-                        # Atribui o tempo ocioso à primeira linha do intervalo
-                        # IMPORTANTE: Converter de minutos para horas antes de atribuir
-                        df_resultado.at[inicio_intervalo, 'Motor Ocioso'] = tempo_ocioso / 60.0  # Dividir por 60 para converter minutos em horas
-                    
-                    # Reseta o intervalo
-                    em_intervalo = False
-                    soma_intervalo = 0
-                    inicio_intervalo = None
+        # Verificar a extensão do arquivo
+        extensao = os.path.splitext(caminho_arquivo)[1].lower()
+        
+        # Ler o arquivo conforme sua extensão
+        if extensao == '.txt':
+            # Tentar ler como TXT, tentando detectar o separador
+            separadores = [';', ',', '\t']
+            for sep in separadores:
+                try:
+                    df = pd.read_csv(caminho_arquivo, sep=sep, encoding='utf-8')
+                    # Se chegou aqui, conseguiu ler o arquivo com este separador
+                    print(f"Arquivo lido com sucesso usando separador: '{sep}'")
+                    break
+                except Exception:
+                    continue
+            else:
+                # Se nenhum separador funcionou, tentar com encoding latin1
+                for sep in separadores:
+                    try:
+                        df = pd.read_csv(caminho_arquivo, sep=sep, encoding='latin1')
+                        print(f"Arquivo lido com sucesso usando separador: '{sep}' e encoding latin1")
+                        break
+                    except Exception:
+                        continue
                 else:
-                    # Se <= 1 minuto, soma ao intervalo atual
-                    soma_intervalo += diferenca
-                    df_resultado.at[i, 'Em_Intervalo'] = True
-                    df_resultado.at[i, 'Soma_Intervalo'] = soma_intervalo
+                    raise ValueError(f"Não foi possível ler o arquivo {caminho_arquivo} com nenhum separador.")
+        
+        elif extensao == '.csv':
+            # Tentar ler como CSV
+            try:
+                df = pd.read_csv(caminho_arquivo, sep=';', encoding='utf-8')
+            except:
+                try:
+                    df = pd.read_csv(caminho_arquivo, sep=',', encoding='utf-8')
+                except:
+                    try:
+                        df = pd.read_csv(caminho_arquivo, sep=';', encoding='latin1')
+                    except:
+                        df = pd.read_csv(caminho_arquivo, sep=',', encoding='latin1')
+        else:
+            raise ValueError(f"Extensão de arquivo não suportada: {extensao}")
+        
+        # Verificar se o DataFrame foi carregado corretamente
+        if df.empty:
+            print(f"O arquivo {os.path.basename(caminho_arquivo)} não contém dados.")
+            return pd.DataFrame()
+        
+        print(f"Arquivo carregado com {len(df)} registros e {len(df.columns)} colunas.")
+        
+        # Normalizar nomes das colunas (remover espaços extras, converter para título)
+        df.columns = [col.strip() for col in df.columns]
+        
+        # Verificar colunas essenciais
+        colunas_essenciais = ['Equipamento', 'Operador', 'Estado', 'Hora']
+        colunas_faltantes = [col for col in colunas_essenciais if col not in df.columns]
+        
+        if colunas_faltantes:
+            print(f"AVISO: As colunas {colunas_faltantes} estão faltando no arquivo.")
             
-            # Se encontrar Parado com Motor Ligado = 1
+            # Tentar encontrar alternativas para as colunas faltantes
+            mapeamento_alternativo = {
+                'Equipamento': ['Frota', 'ID Equipamento', 'ID_Equipamento'],
+                'Operador': ['Motorista', 'Condutor', 'ID Operador'],
+                'Estado': ['Status', 'Estado Operacional', 'Situacao'],
+                'Hora': ['Horário', 'Time', 'Timestamp']
+            }
+            
+            # Tentar encontrar e renomear as colunas alternativas
+            for col_faltante in colunas_faltantes:
+                for alt in mapeamento_alternativo.get(col_faltante, []):
+                    if alt in df.columns:
+                        print(f"Usando coluna alternativa: '{alt}' para '{col_faltante}'")
+                        df.rename(columns={alt: col_faltante}, inplace=True)
+                        break
+        
+        # Remover colunas não utilizadas, se existirem
+        colunas_para_remover = [col for col in COLUNAS_REMOVER if col in df.columns]
+        if colunas_para_remover:
+            df = df.drop(columns=colunas_para_remover)
+            print(f"Colunas removidas: {colunas_para_remover}")
+        
+        # Processar coluna Data e Hora
+        if 'Data' in df.columns and 'Hora' in df.columns:
+            # Converter Data para datetime
+            try:
+                df['Data'] = pd.to_datetime(df['Data'], format='%d/%m/%Y', errors='coerce')
+            except:
+                try:
+                    df['Data'] = pd.to_datetime(df['Data'], errors='coerce')
+                except Exception as e:
+                    print(f"Erro ao converter coluna Data: {str(e)}")
+            
+            # Converter Hora para datetime.time
+            try:
+                df['Hora'] = pd.to_datetime(df['Hora'], format='%H:%M:%S', errors='coerce').dt.time
+            except Exception as e:
+                print(f"Erro ao converter coluna Hora: {str(e)}")
+                # Tentar outros formatos
+                try:
+                    df['Hora'] = pd.to_datetime(df['Hora'], errors='coerce').dt.time
+                except:
+                    pass
+        
+        # Calcular a diferença de horas entre registros consecutivos
+        df = calcular_diferencas_hora(df)
+        
+        # Adicionar coluna de Horas Produtivas
+        # Se 'Grupo Operacao' existe, considere 'Produtiva' quando for 'Produtiva'
+        if 'Grupo Operacao' in df.columns:
+            df['Horas Produtivas'] = df.apply(
+                lambda row: row['Diferença_Hora'] if row['Grupo Operacao'] == 'Produtiva' else 0,
+                axis=1
+            )
+        else:
+            # Se não existir 'Grupo Operacao', assumir 0
+            df['Horas Produtivas'] = 0
+        
+        # Adicionar coluna GPS 
+        if 'GPS' not in df.columns:
+            # Se 'Latitude' e 'Longitude' existirem, considerar GPS válido
+            if 'Latitude' in df.columns and 'Longitude' in df.columns:
+                df['GPS'] = df.apply(
+                    lambda row: 1 if pd.notnull(row['Latitude']) and pd.notnull(row['Longitude']) else 0,
+                    axis=1
+                )
             else:
-                soma_intervalo += diferenca
-                df_resultado.at[i, 'Em_Intervalo'] = True
-                df_resultado.at[i, 'Soma_Intervalo'] = soma_intervalo
-    
-    # Tratar último intervalo aberto, se houver
-    if em_intervalo and soma_intervalo > 1:
-        tempo_ocioso = soma_intervalo - 1
-        # Converter de minutos para horas antes de atribuir
-        df_resultado.at[inicio_intervalo, 'Motor Ocioso'] = tempo_ocioso / 60.0  # Dividir por 60 para converter minutos em horas
-    
-    # Garantir que o tempo ocioso nunca seja maior que o tempo ligado para cada registro
-    for i in range(len(df_resultado)):
-        if df_resultado.iloc[i]['Motor Ocioso'] > 0:
-            # Para transbordos, Motor Ligado é 'LIGADO' ou 'DESLIGADO', não 1 ou 0
-            motor_ligado = df_resultado.iloc[i]['Motor Ligado'] == 'LIGADO'
-            # Se o motor estiver ligado, limitar o tempo ocioso ao tempo ligado
-            if motor_ligado:
-                tempo_hora = df_resultado.iloc[i]['Diferença_Hora']
-                if df_resultado.iloc[i]['Motor Ocioso'] > tempo_hora:
-                    df_resultado.at[i, 'Motor Ocioso'] = tempo_hora
+                # GPS desconhecido
+                df['GPS'] = 0
+        
+        # Adicionar coluna de Parado com Motor Ligado se não existir
+        if 'Parado com motor ligado' not in df.columns:
+            if 'Estado' in df.columns and 'Motor Ligado' in df.columns:
+                # Considerar parado com motor ligado quando Estado é 'Parado' e Motor Ligado é 'LIGADO'
+                df['Parado com motor ligado'] = df.apply(
+                    lambda row: 1 if row['Estado'] == 'Parado' and row['Motor Ligado'] == 'LIGADO' else 0,
+                    axis=1
+                )
             else:
-                # Se o motor não estiver ligado, o tempo ocioso deve ser zero
-                df_resultado.at[i, 'Motor Ocioso'] = 0
+                # Não é possível determinar, assumir 0
+                df['Parado com motor ligado'] = 0
+        
+        # Retornar o DataFrame processado
+        return df
     
-    # Remover colunas auxiliares
-    df_resultado = df_resultado.drop(['Diferença_Minutos', 'Em_Intervalo', 'Soma_Intervalo'], axis=1)
+    except Exception as e:
+        print(f"Erro ao processar o arquivo {caminho_arquivo}: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return None
+
+def calcular_diferencas_hora(df):
+    """
+    Calcula a diferença de horas entre registros consecutivos para cada equipamento.
     
-    return df_resultado
+    Args:
+        df (DataFrame): DataFrame com os dados
+        
+    Returns:
+        DataFrame: DataFrame com a coluna 'Diferença_Hora' adicionada
+    """
+    try:
+        # Inicializar coluna de diferença com zero
+        df['Diferença_Hora'] = 0.0
+        
+        # Se não tiver coluna Data ou Hora, não é possível calcular diferenças
+        if 'Data' not in df.columns or 'Hora' not in df.columns:
+            print("AVISO: Colunas 'Data' ou 'Hora' não encontradas. Não é possível calcular diferenças de hora.")
+            return df
+        
+        # Converter Data e Hora para datetime
+        df['DateTime'] = None
+        for i, row in df.iterrows():
+            try:
+                # Combinar data e hora
+                if pd.notnull(row['Data']) and pd.notnull(row['Hora']):
+                    data = row['Data']
+                    hora = row['Hora']
+                    
+                    # Se hora for um objeto time, converter para string
+                    if hasattr(hora, 'strftime'):
+                        hora_str = hora.strftime('%H:%M:%S')
+                    else:
+                        hora_str = str(hora)
+                    
+                    # Se data for um objeto datetime, converter para string
+                    if hasattr(data, 'strftime'):
+                        data_str = data.strftime('%Y-%m-%d')
+                    else:
+                        data_str = str(data)
+                    
+                    # Combinar e converter para datetime
+                    df.at[i, 'DateTime'] = pd.to_datetime(f"{data_str} {hora_str}")
+            except Exception as e:
+                print(f"Erro ao converter data/hora na linha {i}: {str(e)}")
+        
+        # Agrupar por equipamento
+        equipamentos = df['Equipamento'].unique()
+        
+        for equip in equipamentos:
+            # Filtrar registros deste equipamento
+            indices = df[df['Equipamento'] == equip].index
+            
+            if len(indices) <= 1:
+                continue
+            
+            # Ordenar por DateTime
+            if pd.notnull(df.loc[indices, 'DateTime']).all():
+                indices_ordenados = df.loc[indices].sort_values('DateTime').index
+                
+                # Calcular diferenças
+                for i in range(len(indices_ordenados) - 1):
+                    idx_atual = indices_ordenados[i]
+                    idx_proximo = indices_ordenados[i + 1]
+                    
+                    if pd.notnull(df.loc[idx_atual, 'DateTime']) and pd.notnull(df.loc[idx_proximo, 'DateTime']):
+                        # Calcular diferença em horas
+                        diferenca = (df.loc[idx_proximo, 'DateTime'] - df.loc[idx_atual, 'DateTime']).total_seconds() / 3600
+                        
+                        # Aplicar a diferença ao registro atual
+                        df.at[idx_atual, 'Diferença_Hora'] = diferenca
+                
+                # Último registro: usar a média das diferenças anteriores ou um valor padrão
+                if len(indices_ordenados) > 1:
+                    diferencas = df.loc[indices_ordenados[:-1], 'Diferença_Hora']
+                    media = diferencas.mean() if not diferencas.empty else 0.5  # Padrão: 30 minutos
+                    df.at[indices_ordenados[-1], 'Diferença_Hora'] = media
+        
+        # Remover a coluna auxiliar
+        df = df.drop('DateTime', axis=1)
+        
+        return df
+    
+    except Exception as e:
+        print(f"Erro ao calcular diferenças de hora: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return df
+
+def calcular_base_calculo(df):
+    """
+    Calcula a tabela Base Calculo a partir dos dados do DataFrame base.
+    Esta função agrega os dados por Operador e Equipamento, calculando métricas importantes.
+    
+    Args:
+        df (DataFrame): DataFrame com os dados já processados
+        
+    Returns:
+        DataFrame: DataFrame com a Base Calculo
+    """
+    # Verificar se o DataFrame está vazio
+    if df.empty:
+        return pd.DataFrame()
+    
+    # Garantir que temos as colunas necessárias
+    colunas_necessarias = [
+        'Operador', 'Equipamento', 'Diferença_Hora', 'Horas Produtivas',
+        'GPS', 'Parado com motor ligado', 'Motor Ligado'
+    ]
+    
+    colunas_faltantes = [col for col in colunas_necessarias if col not in df.columns]
+    if colunas_faltantes:
+        print(f"AVISO: Colunas necessárias para Base Calculo estão faltando: {colunas_faltantes}")
+        # Adicionar colunas faltantes com valor 0
+        for col in colunas_faltantes:
+            df[col] = 0
+    
+    # Filtrar operadores excluídos
+    df_filtrado = df[~df['Operador'].isin(OPERADORES_EXCLUIR)]
+    
+    # Agrupar por Operador e Equipamento
+    base_calculo = df_filtrado.groupby(['Operador', 'Equipamento']).agg({
+        'Diferença_Hora': 'sum',              # Total de horas
+        'Horas Produtivas': 'sum',            # Horas produtivas
+        'GPS': 'sum',                         # Tempo com GPS válido
+        'Parado com motor ligado': 'sum',     # Tempo ocioso (parado com motor ligado)
+        'Motor Ocioso': 'sum'                 # Tempo de motor ocioso calculado
+    }).reset_index()
+    
+    # Renomear colunas
+    base_calculo.rename(columns={
+        'Diferença_Hora': 'Horas totais',
+        'Motor Ocioso': 'Motor Ocioso Calculado'
+    }, inplace=True)
+    
+    # Calcular métricas adicionais
+    
+    # 1. Tempo de motor ligado (considerar como igual a Horas totais para transbordo)
+    base_calculo['Motor Ligado'] = base_calculo['Horas totais']
+    
+    # 2. Percentual de tempo ocioso (parado com motor ligado)
+    base_calculo['% Parado com motor ligado'] = base_calculo.apply(
+        lambda row: row['Parado com motor ligado'] / row['Motor Ligado'] 
+                   if row['Motor Ligado'] > 0 else 0,
+        axis=1
+    )
+    
+    # 3. Percentual de utilização de GPS
+    base_calculo['% Utilização GPS'] = base_calculo.apply(
+        lambda row: row['GPS'] / row['Horas totais'] 
+                   if row['Horas totais'] > 0 else 0,
+        axis=1
+    )
+    
+    # 4. Calcular Falta de Apontamento
+    # Para transbordos, considerar falta de apontamento quando:
+    # - Não está em horas produtivas
+    # - Não está em tempo ocioso
+    base_calculo['Falta de Apontamento'] = base_calculo.apply(
+        lambda row: row['Horas totais'] - row['Horas Produtivas'] - row['Parado com motor ligado'],
+        axis=1
+    )
+    
+    # 5. Percentual de Falta de Apontamento
+    base_calculo['% Falta de Apontamento'] = base_calculo.apply(
+        lambda row: row['Falta de Apontamento'] / row['Horas totais'] 
+                   if row['Horas totais'] > 0 else 0,
+        axis=1
+    )
+    
+    # 6. Calcular eficiência energética (Horas Produtivas / Horas totais)
+    base_calculo['Eficiência Energética'] = base_calculo.apply(
+        lambda row: row['Horas Produtivas'] / row['Horas totais']
+                   if row['Horas totais'] > 0 else 0,
+        axis=1
+    )
+    
+    # Aplicar correções para valores negativos ou valores > 1
+    colunas_porcentagem = ['% Parado com motor ligado', '% Utilização GPS', '% Falta de Apontamento']
+    for col in colunas_porcentagem:
+        base_calculo[col] = base_calculo[col].clip(0, 1)  # Limitar entre 0 e 1
+    
+    # Garantir que Falta de Apontamento não seja negativa
+    base_calculo['Falta de Apontamento'] = base_calculo['Falta de Apontamento'].clip(0)
+    
+    return base_calculo
 
 if __name__ == "__main__":
     print("="*80)
