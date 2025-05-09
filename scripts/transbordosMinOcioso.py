@@ -1524,18 +1524,12 @@ def calcular_base_calculo(df):
             # Horas produtivas
             horas_produtivas = dados['Horas Produtivas'].sum()
             
-            # Falta de apontamento
-            # Consideramos falta de apontamento quando o motor está ligado mas não há operação produtiva
-            falta_apontamento = motor_ligado - horas_produtivas - dados[
-                (dados['Motor Ligado'] == 'LIGADO') & 
-                (dados['Grupo Operacao'].isin(['Manutenção', 'Sem Apontamento']))
-            ]['Diferença_Hora'].sum()
+            # Falta de apontamento - CORRIGIDO
+            # Agora somamos apenas as horas onde operação é "8340 - FALTA DE APONTAMENTO"
+            falta_apontamento = dados[dados['Operacao'] == '8340 - FALTA DE APONTAMENTO']['Diferença_Hora'].sum()
             
-            # Garantir que falta de apontamento nunca seja negativa
-            falta_apontamento = max(falta_apontamento, 0)
-            
-            # Calcular a porcentagem de falta de apontamento
-            porcentagem_falta = calcular_porcentagem(falta_apontamento, motor_ligado) if motor_ligado > 0 else 0
+            # Calcular a porcentagem de falta de apontamento em relação ao tempo total
+            porcentagem_falta = calcular_porcentagem(falta_apontamento, horas_totais) if horas_totais > 0 else 0
             
             # Adicionar aos resultados
             resultados_base_calculo.append({
