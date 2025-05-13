@@ -781,41 +781,183 @@ def calcular_uso_gps(base_calculo):
 
 def calcular_media_velocidade(df):
     """
-    Calcula a média de velocidade para cada operador.
+    Calcula a média de velocidade para cada operador, separando por tipo de deslocamento:
+    - Deslocamento Carregado (Estado Operacional = "DESLOCAMENTO CARREGADO")
+    - Deslocamento Vazio (Estado Operacional = "DESLOCAMENTO VAZIO")
     
     Args:
         df (DataFrame): DataFrame com os dados
         
     Returns:
-        DataFrame: DataFrame com a média de velocidade por operador
+        DataFrame: DataFrame com a média de velocidade por operador e tipo de deslocamento
     """
     # Filtrar operadores excluídos
     df = df[~df['Operador'].isin(OPERADORES_EXCLUIR)]
     
-    # Identificar registros válidos para cálculo de velocidade
-    # Usar 'Grupo Operacao' == 'Produtiva' em vez de 'Produtivo' == 1
-    registros_validos = (df['Grupo Operacao'] == 'Produtiva') & (df['Velocidade'] > 0)
+    # DIAGNÓSTICO: Verificar dados antes da filtragem
+    print(f"Total de registros antes da filtragem: {len(df)}")
     
-    # Se a coluna 'Movimento' existir, adicionar à condição
-    if 'Movimento' in df.columns:
-        registros_validos = registros_validos & (df['Movimento'] == 1)
+    # Verificar se as colunas necessárias existem
+    colunas_necessarias = ['Estado Operacional', 'Velocidade']
+    for coluna in colunas_necessarias:
+        if coluna not in df.columns:
+            print(f"ERRO: Coluna '{coluna}' não encontrada no DataFrame!")
+            return pd.DataFrame(columns=['Operador', 'Velocidade Geral', 'Velocidade Carregado', 'Velocidade Vazio'])
     
-    # Calcular média de velocidade por operador
-    media_velocidade = df[registros_validos].groupby('Operador')['Velocidade'].mean().reset_index()
+    # Identificar registros com velocidade > 0 (sem filtros adicionais inicialmente)
+    registros_velocidade = df['Velocidade'] > 0
     
-    # Garantir que todos os operadores estejam no resultado, mesmo sem velocidade
+    # DIAGNÓSTICO: Mostrar estatísticas de velocidade
+    print(f"Registros com velocidade > 0: {registros_velocidade.sum()}")
+    print(f"Média de velocidade geral: {df[registros_velocidade]['Velocidade'].mean()}")
+    
+    # DIAGNÓSTICO: Verificar estados operacionais únicos disponíveis
+    estados_unicos = df['Estado Operacional'].unique()
+    print(f"Estados operacionais únicos disponíveis: {estados_unicos}")
+    
+    # Estados operacionais específicos - tratando possíveis variações
+    estado_carregado = "DESLOCAMENTO CARREGADO"
+    estado_vazio = "DESLOCAMENTO VAZIO"
+    
+    # DIAGNÓSTICO: Verificar quantos registros existem para cada estado operacional
+    # antes de aplicar outros filtros
+    for estado in estados_unicos:
+        registros = len(df[df['Estado Operacional'] == estado])
+        velocidade_media = df[df['Estado Operacional'] == estado]['Velocidade'].mean()
+        print(f"Estado '{estado}': {registros} registros, velocidade média: {velocidade_media}")
+    
+    # DIAGNÓSTICO: Verificar especificamente para os estados que nos interessam
+    print(f"Registros para '{estado_carregado}' com velocidade > 0: {len(df[(df['Estado Operacional'] == estado_carregado) & (df['Velocidade'] > 0)])}")
+    print(f"Registros para '{estado_vazio}' com velocidade > 0: {len(df[(df['Estado Operacional'] == estado_vazio) & (df['Velocidade'] > 0)])}")
+    
+    # Aplicar filtro de velocidade > 0 (mínimo necessário)
+    df_validos = df[df['Velocidade'] > 0].copy()
+    
+    # Estatísticas gerais para toda a população
+    print("\nESTATÍSTICAS GERAIS DE VELOCIDADE:")
+    print(f"Mínimo: {df_validos['Velocidade'].min()}")
+    print(f"Máximo: {df_validos['Velocidade'].max()}")
+    print(f"Média: {df_validos['Velocidade'].mean()}")
+    print(f"Mediana: {df_validos['Velocidade'].median()}")
+    print(f"Desvio Padrão: {df_validos['Velocidade'].std()}")
+    print(f"Total de registros: {len(df_validos)}")
+    
+    # Estatísticas para cada estado operacional
+    for estado in [estado_carregado, estado_vazio]:
+        df_estado = df_validos[df_validos['Estado Operacional'] == estado]
+        if not df_estado.empty:
+            print(f"\nEstatísticas gerais para {estado}:")
+            print(f"Mínimo: {df_estado['Velocidade'].min()}")
+            print(f"Máximo: {df_estado['Velocidade'].max()}")
+            print(f"Média: {df_estado['Velocidade'].mean()}")
+            print(f"Mediana: {df_estado['Velocidade'].median()}")
+            print(f"Desvio Padrão: {df_estado['Velocidade'].std()}")
+            print(f"Total de registros: {len(df_estado)}")
+        else:
+            print(f"\nNenhum registro para {estado}")
+    
+    # Inicializar DataFrame para resultado
     todos_operadores = df['Operador'].unique()
-    for operador in todos_operadores:
-        if operador not in media_velocidade['Operador'].values:
-            media_velocidade = pd.concat([
-                media_velocidade,
-                pd.DataFrame({'Operador': [operador], 'Velocidade': [0]})
-            ], ignore_index=True)
+    resultado = pd.DataFrame({'Operador': todos_operadores})
+    resultado['Velocidade Geral'] = 0
+    resultado['Velocidade Carregado'] = 0
+    resultado['Velocidade Vazio'] = 0
+    resultado['Tipo Deslocamento'] = ''  # Nova coluna para indicar o tipo de deslocamento
+    
+    # Calcular média geral de velocidade por operador
+    if not df_validos.empty:
+        # Média geral (apenas filtro de velocidade > 0)
+        media_geral = df_validos.groupby('Operador')['Velocidade'].mean()
+        
+        # Calcular média de velocidade para deslocamento carregado
+        df_carregado = df_validos[df_validos['Estado Operacional'] == estado_carregado]
+        if not df_carregado.empty:
+            # Estatísticas detalhadas para carregado
+            stats_carregado = df_carregado.groupby('Operador')['Velocidade'].agg(['min', 'max', 'mean', 'count'])
+            print("\nEstatísticas detalhadas para DESLOCAMENTO CARREGADO:")
+            print(stats_carregado)
+            
+            media_carregado = stats_carregado['mean']
+            print(f"Média de velocidade carregado calculada para {len(media_carregado)} operadores.")
+            print(f"Exemplo de registros carregado: {df_carregado.head(3)[['Operador', 'Estado Operacional', 'Velocidade']]}")
+        else:
+            media_carregado = pd.Series(dtype='float64')
+            print("Nenhum registro para cálculo de média carregado.")
+        
+        # Calcular média de velocidade para deslocamento vazio
+        df_vazio = df_validos[df_validos['Estado Operacional'] == estado_vazio]
+        if not df_vazio.empty:
+            # Estatísticas detalhadas para vazio
+            stats_vazio = df_vazio.groupby('Operador')['Velocidade'].agg(['min', 'max', 'mean', 'count'])
+            print("\nEstatísticas detalhadas para DESLOCAMENTO VAZIO:")
+            print(stats_vazio)
+            
+            media_vazio = stats_vazio['mean']
+            print(f"Média de velocidade vazio calculada para {len(media_vazio)} operadores.")
+            print(f"Exemplo de registros vazio: {df_vazio.head(3)[['Operador', 'Estado Operacional', 'Velocidade']]}")
+        else:
+            media_vazio = pd.Series(dtype='float64')
+            print("Nenhum registro para cálculo de média vazio.")
+        
+        # Preencher resultados para cada operador
+        for operador in todos_operadores:
+            # Média geral
+            if operador in media_geral:
+                resultado.loc[resultado['Operador'] == operador, 'Velocidade Geral'] = media_geral[operador]
+            
+            # Média carregado
+            tem_carregado = False
+            if operador in media_carregado:
+                resultado.loc[resultado['Operador'] == operador, 'Velocidade Carregado'] = media_carregado[operador]
+                tem_carregado = media_carregado[operador] > 0
+            
+            # Média vazio
+            tem_vazio = False
+            if operador in media_vazio:
+                resultado.loc[resultado['Operador'] == operador, 'Velocidade Vazio'] = media_vazio[operador]
+                tem_vazio = media_vazio[operador] > 0
+            
+            # Definir tipo de deslocamento
+            if tem_carregado and tem_vazio:
+                tipo = "Ambos"
+            elif tem_carregado:
+                tipo = "Apenas Carregado"
+            elif tem_vazio:
+                tipo = "Apenas Vazio"
+            else:
+                tipo = "Nenhum"
+                
+            resultado.loc[resultado['Operador'] == operador, 'Tipo Deslocamento'] = tipo
     
     # Ordenar por operador
-    media_velocidade = media_velocidade.sort_values('Operador')
+    resultado = resultado.sort_values('Operador')
     
-    return media_velocidade
+    # DIAGNÓSTICO: Verificar resultado final
+    print(f"\nVelocidades calculadas para {len(resultado)} operadores.")
+    print("Operadores com velocidade vazio > 0:", len(resultado[resultado['Velocidade Vazio'] > 0]))
+    print("Operadores com velocidade carregado > 0:", len(resultado[resultado['Velocidade Carregado'] > 0]))
+    
+    # Identificar operadores com apenas um tipo de deslocamento
+    apenas_carregado = resultado[(resultado['Velocidade Carregado'] > 0) & (resultado['Velocidade Vazio'] == 0)]
+    apenas_vazio = resultado[(resultado['Velocidade Carregado'] == 0) & (resultado['Velocidade Vazio'] > 0)]
+    ambos = resultado[(resultado['Velocidade Carregado'] > 0) & (resultado['Velocidade Vazio'] > 0)]
+    nenhum = resultado[(resultado['Velocidade Carregado'] == 0) & (resultado['Velocidade Vazio'] == 0)]
+    
+    print(f"\nDistribuição dos operadores:")
+    print(f"Apenas deslocamento carregado: {len(apenas_carregado)} operadores")
+    print(f"Apenas deslocamento vazio: {len(apenas_vazio)} operadores")
+    print(f"Ambos os deslocamentos: {len(ambos)} operadores")
+    print(f"Nenhum deslocamento: {len(nenhum)} operadores")
+    
+    if len(apenas_carregado) > 0:
+        print("\nExemplos de operadores apenas com deslocamento carregado:")
+        print(apenas_carregado.head(3)[['Operador', 'Velocidade Carregado', 'Velocidade Vazio']])
+        
+    if len(apenas_vazio) > 0:
+        print("\nExemplos de operadores apenas com deslocamento vazio:")
+        print(apenas_vazio.head(3)[['Operador', 'Velocidade Carregado', 'Velocidade Vazio']])
+    
+    return resultado
 
 def identificar_operadores_duplicados(df, substituicoes=None):
     """
@@ -977,7 +1119,7 @@ def criar_excel_com_planilhas(df_base, base_calculo, disp_mecanica, eficiencia_e
         df_impureza.to_excel(writer, sheet_name='Impureza Vegetal', index=False)
         
         if media_velocidade is None:
-            media_velocidade = pd.DataFrame(columns=['Operador', 'Velocidade'])
+            media_velocidade = pd.DataFrame(columns=['Operador', 'Velocidade Geral', 'Velocidade Carregado', 'Velocidade Vazio'])
         media_velocidade.to_excel(writer, sheet_name='Média Velocidade', index=False)
         
         # IDs duplicadas e substituídas
@@ -1023,7 +1165,16 @@ def criar_excel_com_planilhas(df_base, base_calculo, disp_mecanica, eficiencia_e
             
             elif sheet_name == 'Média Velocidade':
                 for row in range(2, worksheet.max_row + 1):
-                    cell = worksheet.cell(row=row, column=2)  # Coluna B (Velocidade)
+                    # Coluna B (Velocidade Geral)
+                    cell = worksheet.cell(row=row, column=2)
+                    cell.number_format = '0.00'
+                    
+                    # Coluna C (Velocidade Carregado)
+                    cell = worksheet.cell(row=row, column=3)
+                    cell.number_format = '0.00'
+                    
+                    # Coluna D (Velocidade Vazio)
+                    cell = worksheet.cell(row=row, column=4)
                     cell.number_format = '0.00'
             
             elif sheet_name == 'Horas por Frota':
