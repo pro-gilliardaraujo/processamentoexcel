@@ -1,0 +1,320 @@
+{
+    "metas": {
+        "tdh": 0.0124,
+        "diesel": 0.718,
+        "usoGPS": 90,
+        "motorOcioso": 6,
+        "horaElevador": 5,
+        "mediaVelocidade": 15,
+        "faltaApontamento": 10,
+        "impureza_vegetal": 64,
+        "eficienciaEnergetica": 65,
+        "disponibilidadeMecanica": 90
+    },
+    "uso_gps": [
+        {
+            "id": 1,
+            "nome": "1 - SEM OPERADOR",
+            "porcentagem": 0.0
+        },
+        {
+            "id": 2,
+            "nome": "113310 - VITOR SOARES FREITAS",
+            "porcentagem": 37.53
+        },
+        {
+            "id": 3,
+            "nome": "1298 - ROBSON JOSE DA SILVA",
+            "porcentagem": 0.0
+        },
+        {
+            "id": 4,
+            "nome": "136455 - RAFAEL ALEXANDRE DA SILVA",
+            "porcentagem": 35.870000000000005
+        },
+        {
+            "id": 5,
+            "nome": "143536 - LUCAS SANTOS SILVA",
+            "porcentagem": 0.0
+        },
+        {
+            "id": 6,
+            "nome": "426551 - MANUEL RICARDO ALVES DOS SANTOS",
+            "porcentagem": 0.0
+        },
+        {
+            "id": 7,
+            "nome": "508581 - ALFREDO FERREIRA DE QUEIROZ",
+            "porcentagem": 22.1
+        },
+        {
+            "id": 8,
+            "nome": "704894 - REINALDO QUEIROZ DE JESUS",
+            "porcentagem": 3.02
+        },
+        {
+            "id": 9,
+            "nome": "8555232 - RONIVON CESAR DA SILVA",
+            "porcentagem": 14.245
+        },
+        {
+            "id": 10,
+            "nome": "889477 - JOAO BATISTA DA ROCHA",
+            "porcentagem": 2.18
+        }
+    ],
+    "metadata": {
+        "date": "2025-05-12",
+        "type": "transbordo_diario",
+        "frente": "frente3",
+        "generated_at": "2025-05-13T17:42:23.796214",
+        "equipment_ids": null
+    },
+    "motor_ocioso": [
+        {
+            "id": 1,
+            "nome": "1 - SEM OPERADOR",
+            "percentual": 3.0733333333333333,
+            "tempoLigado": 0.7830555555555556,
+            "tempoOcioso": 0.01666666666666667
+        },
+        {
+            "id": 2,
+            "nome": "113310 - VITOR SOARES FREITAS",
+            "percentual": 2.39,
+            "tempoLigado": 6.228888888888887,
+            "tempoOcioso": 0.06527777777777778
+        },
+        {
+            "id": 3,
+            "nome": "1298 - ROBSON JOSE DA SILVA",
+            "percentual": 43.045,
+            "tempoLigado": 0.1797222222222222,
+            "tempoOcioso": 0.03611111111111111
+        },
+        {
+            "id": 4,
+            "nome": "136455 - RAFAEL ALEXANDRE DA SILVA",
+            "percentual": 1.29,
+            "tempoLigado": 6.088611111111111,
+            "tempoOcioso": 0.07833333333333332
+        },
+        {
+            "id": 5,
+            "nome": "143536 - LUCAS SANTOS SILVA",
+            "percentual": 0.95,
+            "tempoLigado": 5.976388888888889,
+            "tempoOcioso": 0.05694444444444444
+        },
+        {
+            "id": 6,
+            "nome": "426551 - MANUEL RICARDO ALVES DOS SANTOS",
+            "percentual": 1.81,
+            "tempoLigado": 5.633055555555555,
+            "tempoOcioso": 0.1019444444444444
+        },
+        {
+            "id": 7,
+            "nome": "508581 - ALFREDO FERREIRA DE QUEIROZ",
+            "percentual": 4.590000000000001,
+            "tempoLigado": 7.303611111111111,
+            "tempoOcioso": 0.335
+        },
+        {
+            "id": 8,
+            "nome": "704894 - REINALDO QUEIROZ DE JESUS",
+            "percentual": 9.77,
+            "tempoLigado": 7.761388888888888,
+            "tempoOcioso": 0.7583333333333334
+        },
+        {
+            "id": 9,
+            "nome": "8555232 - RONIVON CESAR DA SILVA",
+            "percentual": 4.04,
+            "tempoLigado": 6.267499999999999,
+            "tempoOcioso": 0.3119444444444444
+        },
+        {
+            "id": 10,
+            "nome": "889477 - JOAO BATISTA DA ROCHA",
+            "percentual": 1.4200000000000002,
+            "tempoLigado": 6.971666666666666,
+            "tempoOcioso": 0.09888888888888889
+        }
+    ],
+    "horas_por_frota": [
+        {},
+        {},
+        {}
+    ],
+    "media_velocidade": [
+        {
+            "id": 1,
+            "nome": "1 - SEM OPERADOR",
+            "velocidade": 8.65
+        },
+        {
+            "id": 2,
+            "nome": "113310 - VITOR SOARES FREITAS",
+            "velocidade": 4.64
+        },
+        {
+            "id": 3,
+            "nome": "1298 - ROBSON JOSE DA SILVA",
+            "velocidade": 0.0
+        },
+        {
+            "id": 4,
+            "nome": "136455 - RAFAEL ALEXANDRE DA SILVA",
+            "velocidade": 5.335159817351599
+        },
+        {
+            "id": 5,
+            "nome": "143536 - LUCAS SANTOS SILVA",
+            "velocidade": 5.201570680628272
+        },
+        {
+            "id": 6,
+            "nome": "426551 - MANUEL RICARDO ALVES DOS SANTOS",
+            "velocidade": 4.719597989949749
+        },
+        {
+            "id": 7,
+            "nome": "508581 - ALFREDO FERREIRA DE QUEIROZ",
+            "velocidade": 5.017105263157895
+        },
+        {
+            "id": 8,
+            "nome": "704894 - REINALDO QUEIROZ DE JESUS",
+            "velocidade": 4.77012987012987
+        },
+        {
+            "id": 9,
+            "nome": "8555232 - RONIVON CESAR DA SILVA",
+            "velocidade": 4.693965517241379
+        },
+        {
+            "id": 10,
+            "nome": "889477 - JOAO BATISTA DA ROCHA",
+            "velocidade": 4.871729957805907
+        }
+    ],
+    "falta_apontamento": [
+        {
+            "id": "1",
+            "nome": "1 - SEM OPERADOR",
+            "percentual": 0.09000000000000001
+        },
+        {
+            "id": "2",
+            "nome": "113310 - VITOR SOARES FREITAS",
+            "percentual": 4.135
+        },
+        {
+            "id": "3",
+            "nome": "1298 - ROBSON JOSE DA SILVA",
+            "percentual": 3.36
+        },
+        {
+            "id": "4",
+            "nome": "136455 - RAFAEL ALEXANDRE DA SILVA",
+            "percentual": 1.3299999999999998
+        },
+        {
+            "id": "5",
+            "nome": "143536 - LUCAS SANTOS SILVA",
+            "percentual": 1.78
+        },
+        {
+            "id": "6",
+            "nome": "426551 - MANUEL RICARDO ALVES DOS SANTOS",
+            "percentual": 2.3
+        },
+        {
+            "id": "7",
+            "nome": "508581 - ALFREDO FERREIRA DE QUEIROZ",
+            "percentual": 3.5999999999999996
+        },
+        {
+            "id": "8",
+            "nome": "704894 - REINALDO QUEIROZ DE JESUS",
+            "percentual": 6.569999999999999
+        },
+        {
+            "id": "9",
+            "nome": "8555232 - RONIVON CESAR DA SILVA",
+            "percentual": 7.969999999999999
+        },
+        {
+            "id": "10",
+            "nome": "889477 - JOAO BATISTA DA ROCHA",
+            "percentual": 0.9900000000000001
+        }
+    ],
+    "eficiencia_energetica": [
+        {
+            "id": 1,
+            "nome": "1 - SEM OPERADOR",
+            "eficiencia": 36.392309092011885
+        },
+        {
+            "id": 2,
+            "nome": "113310 - VITOR SOARES FREITAS",
+            "eficiencia": 49.87481031866465
+        },
+        {
+            "id": 3,
+            "nome": "1298 - ROBSON JOSE DA SILVA",
+            "eficiencia": 0.0
+        },
+        {
+            "id": 4,
+            "nome": "136455 - RAFAEL ALEXANDRE DA SILVA",
+            "eficiencia": 49.004280004244634
+        },
+        {
+            "id": 5,
+            "nome": "143536 - LUCAS SANTOS SILVA",
+            "eficiencia": 50.72303828297435
+        },
+        {
+            "id": 6,
+            "nome": "426551 - MANUEL RICARDO ALVES DOS SANTOS",
+            "eficiencia": 44.24667133847233
+        },
+        {
+            "id": 7,
+            "nome": "508581 - ALFREDO FERREIRA DE QUEIROZ",
+            "eficiencia": 45.80163476168572
+        },
+        {
+            "id": 8,
+            "nome": "704894 - REINALDO QUEIROZ DE JESUS",
+            "eficiencia": 48.11947637716792
+        },
+        {
+            "id": 9,
+            "nome": "8555232 - RONIVON CESAR DA SILVA",
+            "eficiencia": 41.737536656891486
+        },
+        {
+            "id": 10,
+            "nome": "889477 - JOAO BATISTA DA ROCHA",
+            "eficiencia": 53.860205418074045
+        }
+    ],
+    "disponibilidade_mecanica": [
+        {
+            "frota": "2127.0",
+            "disponibilidade": 100.0
+        },
+        {
+            "frota": "6087.0",
+            "disponibilidade": 99.4
+        },
+        {
+            "frota": "6088.0",
+            "disponibilidade": 97.91
+        }
+    ]
+}
