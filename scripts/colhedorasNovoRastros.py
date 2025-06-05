@@ -17,6 +17,7 @@ from datetime import datetime
 from openpyxl import Workbook
 from openpyxl.utils.dataframe import dataframe_to_rows
 from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
+from openpyxl.utils import get_column_letter
 
 # Configurações
 processCsv = False  # Altere para True quando quiser processar arquivos CSV
@@ -24,8 +25,6 @@ processCsv = False  # Altere para True quando quiser processar arquivos CSV
 # Constantes
 COLUNAS_REMOVER = [
     'Justificativa Corte Base Desligado',
-    'Latitude',
-    'Longitude',
     'Regional',
     'Tipo de Equipamento',
     'Unidade',
@@ -43,7 +42,7 @@ COLUNAS_DESEJADAS = [
     'Implemento Ligado', 'Motor Ligado', 'Operacao', 'Operador', 'Pressao de Corte',
     'RPM Extrator', 'RPM Motor', 'RTK (Piloto Automatico)', 'Fazenda', 'Zona',
     'Talhao', 'Velocidade', 'Diferença_Hora', 'Parada com Motor Ligado',
-    'Horas Produtivas'
+    'Horas Produtivas','Latitude','Longitude',
 ]
 
 # Valores a serem filtrados
@@ -106,6 +105,99 @@ def carregar_config_calculos():
     print("Usando configurações embutidas no código, ignorando o arquivo calculos_config.json")
     return config
 
+def calcular_motor_ocioso_novo(df):
+    """
+    Calcula o tempo de motor ocioso de acordo com as novas regras:
+    1. Intervalo é fechado quando encontra 'Parada com Motor Ligado = 0' com duração > 1 minuto
+    2. Soma sequências de 'Parada com Motor Ligado = 1' com 'Parada com Motor Ligado = 0' < 1 minuto
+    3. Se o total > 1 minuto, subtrai 1 minuto; se menor, descarta o intervalo
+    
+    Args:
+        df (DataFrame): DataFrame com os dados de operação
+        
+    Returns:
+        DataFrame: DataFrame com a coluna 'Motor Ocioso' atualizada
+    """
+    # Converter a coluna de diferença para minutos
+    df['Diferença_Minutos'] = df['Diferença_Hora'] * 60
+    
+    # Inicializar colunas
+    df['Motor Ocioso'] = 0
+    df['Em_Intervalo'] = False
+    df['Soma_Intervalo'] = 0
+    
+    # Variáveis para controle do intervalo atual
+    em_intervalo = False
+    soma_intervalo = 0
+    inicio_intervalo = None
+    
+    # Iterar sobre as linhas do DataFrame
+    for i in range(len(df)):
+        parada_motor = df.iloc[i]['Parada com Motor Ligado']
+        diferenca = df.iloc[i]['Diferença_Minutos']
+        
+        # Se não estamos em um intervalo
+        if not em_intervalo:
+            # Se encontrar Parada com Motor Ligado = 1, inicia novo intervalo
+            if parada_motor == 1:
+                em_intervalo = True
+                soma_intervalo = diferenca
+                inicio_intervalo = i
+                df.at[i, 'Em_Intervalo'] = True
+                df.at[i, 'Soma_Intervalo'] = soma_intervalo
+        
+        # Se estamos em um intervalo
+        else:
+            # Se encontrar Parada com Motor Ligado = 0
+            if parada_motor == 0:
+                # Se a duração for > 1 minuto, fecha o intervalo
+                if diferenca > 1:
+                    # Se o total acumulado > 1 minuto, subtrai 1 minuto
+                    if soma_intervalo > 1:
+                        tempo_ocioso = soma_intervalo - 1
+                        # Atribui o tempo ocioso à primeira linha do intervalo
+                        # IMPORTANTE: Converter de minutos para horas antes de atribuir
+                        df.at[inicio_intervalo, 'Motor Ocioso'] = tempo_ocioso / 60.0  # CORREÇÃO: Dividir por 60 para converter minutos em horas
+                    
+                    # Reseta o intervalo
+                    em_intervalo = False
+                    soma_intervalo = 0
+                    inicio_intervalo = None
+                else:
+                    # Se <= 1 minuto, soma ao intervalo atual
+                    soma_intervalo += diferenca
+                    df.at[i, 'Em_Intervalo'] = True
+                    df.at[i, 'Soma_Intervalo'] = soma_intervalo
+            
+            # Se encontrar Parada com Motor Ligado = 1
+            else:
+                soma_intervalo += diferenca
+                df.at[i, 'Em_Intervalo'] = True
+                df.at[i, 'Soma_Intervalo'] = soma_intervalo
+    
+    # Tratar último intervalo aberto, se houver
+    if em_intervalo and soma_intervalo > 1:
+        tempo_ocioso = soma_intervalo - 1
+        # CORREÇÃO: Converter de minutos para horas antes de atribuir
+        df.at[inicio_intervalo, 'Motor Ocioso'] = tempo_ocioso / 60.0  # Dividir por 60 para converter minutos em horas
+    
+    # Remover colunas auxiliares
+    df = df.drop(['Diferença_Minutos', 'Em_Intervalo', 'Soma_Intervalo'], axis=1)
+    
+    # Garantir que o tempo ocioso nunca seja maior que o tempo ligado para cada registro
+    for i in range(len(df)):
+        if df.iloc[i]['Motor Ocioso'] > 0:
+            # Se o motor estiver ligado, limitar o tempo ocioso ao tempo ligado
+            if df.iloc[i]['Motor Ligado'] == 1:
+                tempo_hora = df.iloc[i]['Diferença_Hora']
+                if df.iloc[i]['Motor Ocioso'] > tempo_hora:
+                    df.at[i, 'Motor Ocioso'] = tempo_hora
+            else:
+                # Se o motor não estiver ligado, o tempo ocioso deve ser zero
+                df.at[i, 'Motor Ocioso'] = 0
+    
+    return df
+
 def processar_arquivo_base(caminho_arquivo):
     """
     Processa o arquivo TXT ou CSV e retorna o DataFrame com as transformações necessárias.
@@ -155,18 +247,6 @@ def processar_arquivo_base(caminho_arquivo):
                 # Nova regra: se Diferença_Hora > 0.50, então 0
                 df['Diferença_Hora'] = df['Diferença_Hora'].apply(lambda x: 0 if x > 0.50 else x)
             
-            # Converter todos os campos booleanos para valores numéricos
-            colunas_booleanas = ['Esteira Ligada', 'Field Cruiser', 'RTK (Piloto Automatico)', 
-                                'Implemento Ligado', 'Motor Ligado', 'Corte Base Automatico/Manual']
-            
-            for coluna in colunas_booleanas:
-                if coluna in df.columns:
-                    # Converter para valores numéricos (1 para Sim, 0 para Não)
-                    df[coluna] = df[coluna].apply(lambda x: 
-                        1 if str(x).upper() in ['1', 'SIM', 'VERDADEIRO', 'TRUE', 'LIGADO', 'S'] or x is True
-                        else 0
-                    )
-            
             # Cálculos adicionais
             RPM_MINIMO = 300  # Definindo constante para RPM mínimo
 
@@ -187,6 +267,9 @@ def processar_arquivo_base(caminho_arquivo):
                 (df_motor_ocioso['Velocidade'] == 0) & 
                 (df_motor_ocioso['RPM Motor'] >= RPM_MINIMO)
             ).astype(int)
+            
+            # Aplicar o novo cálculo de motor ocioso com intervalos de 1 minuto
+            df = calcular_motor_ocioso_novo(df)
             
             # Verifica se Horas Produtivas já existe
             if 'Horas Produtivas' not in df.columns or df['Horas Produtivas'].isna().any():
@@ -239,7 +322,7 @@ def calcular_base_calculo(df):
     - Horas totais: soma de Diferença_Hora
     - Horas elevador: soma de Diferença_Hora onde Esteira Ligada = 1 E Pressão de Corte > 400
     - Motor Ligado: soma de Diferença_Hora onde Motor Ligado = 1
-    - Parado Com Motor Ligado: soma de Diferença_Hora onde Motor Ligado = 1 E Velocidade = 0
+    - Parado Com Motor Ligado: MÉTODO AVANÇADO - soma da coluna Motor Ocioso, que usa o cálculo com intervalos
     
     Args:
         df (DataFrame): DataFrame processado
@@ -283,19 +366,19 @@ def calcular_base_calculo(df):
         # Determinar o número de dias efetivos para este operador
         dias_operador = dados_filtrados['Data'].nunique() if 'Data' in dados_filtrados.columns else 1
         
-        # Horas totais - soma de Diferença_Hora
+        # Horas totais - soma de Diferença_Hora (IGUAL AO ORIGINAL)
         horas_totais = dados_filtrados['Diferença_Hora'].sum()
         if dias_operador > 1:
             horas_totais = horas_totais / dias_operador
         
-        # Motor Ligado - soma de Diferença_Hora onde Motor Ligado = 1
+        # Motor Ligado - soma de Diferença_Hora onde Motor Ligado = 1 (IGUAL AO ORIGINAL)
         motor_ligado = dados_filtrados[
             dados_filtrados['Motor Ligado'] == 1
         ]['Diferença_Hora'].sum()
         if dias_operador > 1:
             motor_ligado = motor_ligado / dias_operador
         
-        # Horas elevador - soma de Diferença_Hora onde Esteira Ligada = 1 E Pressão de Corte > 400
+        # Horas elevador - soma de Diferença_Hora onde Esteira Ligada = 1 E Pressão de Corte > 400 (IGUAL AO ORIGINAL)
         horas_elevador = dados_filtrados[
             (dados_filtrados['Esteira Ligada'] == 1) & 
             (dados_filtrados['Pressao de Corte'] > 400)
@@ -306,23 +389,17 @@ def calcular_base_calculo(df):
         # Percentual horas elevador (em decimal 0-1)
         percent_elevador = calcular_porcentagem(horas_elevador, horas_totais)
         
-        # Garantir que RTK (Piloto Automatico) seja tratado como valor numérico
-        if 'RTK (Piloto Automatico)' in dados_filtrados.columns:
-            # Converter para valores numéricos (1 para Sim, 0 para Não)
-            dados_filtrados['RTK (Piloto Automatico)'] = dados_filtrados['RTK (Piloto Automatico)'].apply(lambda x: 
-                1 if x in [1, '1', 'SIM', 'Sim', 'sim', 'VERDADEIRO', 'TRUE', 'True', 'LIGADO', True] 
-                else 0
-            )
-        
-        # RTK - soma de Diferença_Hora onde todas as condições são atendidas
+        # RTK - soma de Diferença_Hora onde todas as condições são atendidas (IGUAL AO ORIGINAL)
         rtk = dados_filtrados[
             (dados_filtrados['Grupo Operacao'] == 'Produtiva') &
-            (dados_filtrados['RTK (Piloto Automatico)'] == 1)
+            (dados_filtrados['Pressao de Corte'] > 300) &
+            (dados_filtrados['RTK (Piloto Automatico)'] == 1) &
+            (dados_filtrados['Esteira Ligada'] == 1)
         ]['Diferença_Hora'].sum()
         if dias_operador > 1:
             rtk = rtk / dias_operador
         
-        # Horas Produtivas
+        # Horas Produtivas (IGUAL AO ORIGINAL)
         horas_produtivas = dados_filtrados[
             dados_filtrados['Grupo Operacao'] == 'Produtiva'
         ]['Diferença_Hora'].sum()
@@ -335,11 +412,9 @@ def calcular_base_calculo(df):
         # % Eficiência Elevador (em decimal 0-1)
         eficiencia_elevador = calcular_porcentagem(horas_elevador, motor_ligado)
         
-        # Parado com Motor Ligado - soma de Diferença_Hora onde Motor Ligado = 1 E Velocidade = 0
-        parado_motor_ligado = dados_filtrados[
-            (dados_filtrados['Motor Ligado'] == 1) & 
-            (dados_filtrados['Velocidade'] == 0)
-        ]['Diferença_Hora'].sum()
+        # NOVO MÉTODO: Parado com Motor Ligado - usando o valor calculado pela função calcular_motor_ocioso_novo
+        # A coluna 'Motor Ocioso' contém o tempo ocioso após aplicar a lógica de intervalos e tolerância
+        parado_motor_ligado = dados_filtrados['Motor Ocioso'].sum()
         if dias_operador > 1:
             parado_motor_ligado = parado_motor_ligado / dias_operador
         
@@ -349,7 +424,7 @@ def calcular_base_calculo(df):
         # Debug para verificar os valores
         print(f"\nOperador: {operador} em {equipamento}")
         print(f"Motor Ligado: {motor_ligado:.6f}")
-        print(f"Parado com Motor Ligado: {parado_motor_ligado:.6f}")
+        print(f"Parado com Motor Ligado (método avançado): {parado_motor_ligado:.6f}")
         print(f"% Parado com motor ligado: {percent_parado_motor:.6f}")
         
         resultados.append({
@@ -493,43 +568,50 @@ def calcular_horas_por_frota(df):
 def calcular_motor_ocioso(base_calculo, df_base):
     """
     Calcula o percentual de motor ocioso por operador usando os dados da Base Calculo.
-    Agora usa diretamente os valores calculados na Base Calculo ao invés de recalcular.
+    Agrega os dados por operador, calculando a média quando um operador aparece em múltiplas frotas.
+    
+    Regras de cálculo (Método Avançado):
+    1. Existe uma tolerância de 1 minuto para operações de "Parada com motor ligado" (valor 1)
+    2. Se uma operação tem "Parada com motor ligado = 1" e dura menos de 1 minuto, ela é desconsiderada se:
+       - A próxima operação tem "Parada com motor ligado = 0" e dura mais de 1 minuto
+    3. Se existem duas ou mais operações com "Parada com motor ligado = 1" em sequência (ou com outras operações entre elas que duram menos de 1 minuto):
+       - Somamos o tempo total dessas operações
+       - Subtraímos 1 minuto do total
     
     Args:
         base_calculo (DataFrame): Tabela Base Calculo
-        df_base (DataFrame): DataFrame base (não usado mais, mantido para compatibilidade)
+        df_base (DataFrame): DataFrame base para aplicar filtros de operações
     
     Returns:
-        DataFrame: Percentual de motor ocioso por operador com as colunas:
-            - Operador
-            - Porcentagem
-            - Tempo Ligado (vem da coluna 'Motor Ligado' da Base Calculo)
-            - Tempo Ocioso (vem da coluna 'Parado Com Motor Ligado' da Base Calculo)
+        DataFrame: Percentual de motor ocioso por operador (agregado)
     """
-    # Agrupar por operador (caso o mesmo operador apareça em múltiplas linhas)
+    # Agrupar por operador e usar os valores já calculados na Base Calculo
     agrupado = base_calculo.groupby('Operador').agg({
         'Motor Ligado': 'sum',
         'Parado Com Motor Ligado': 'sum'
     }).reset_index()
     
     resultados = []
-    print("\n=== DETALHAMENTO DO CÁLCULO DE MOTOR OCIOSO (USANDO BASE CALCULO) ===")
-    
+    print("\n=== DETALHAMENTO DO CÁLCULO DE MOTOR OCIOSO (MÉTODO AVANÇADO) ===")
+    print("Utilizando valores da coluna Motor Ocioso calculados com a lógica de intervalos e tolerância")
+    print("=" * 60)
+
     for _, row in agrupado.iterrows():
+        operador = row['Operador']
         tempo_ligado = row['Motor Ligado']
         tempo_ocioso = row['Parado Com Motor Ligado']
         
-        # Calcular porcentagem
+        # Calcular porcentagem de tempo ocioso
         porcentagem = tempo_ocioso / tempo_ligado if tempo_ligado > 0 else 0
         
-        print(f"\nOperador: {row['Operador']}")
-        print(f"Tempo Ligado (Motor Ligado): {tempo_ligado:.6f}")
-        print(f"Tempo Ocioso (Parado Com Motor Ligado): {tempo_ocioso:.6f}")
-        print(f"Porcentagem: {porcentagem:.6f}")
-        print("-" * 50)
+        print(f"\nOperador: {operador}")
+        print(f"Tempo Ocioso (método avançado) = {tempo_ocioso:.6f} horas")
+        print(f"Tempo Ligado = {tempo_ligado:.6f} horas")
+        print(f"Porcentagem = {porcentagem:.6f} ({porcentagem*100:.2f}%)")
+        print("-" * 60)
         
         resultados.append({
-            'Operador': row['Operador'],
+            'Operador': operador,
             'Porcentagem': porcentagem,
             'Tempo Ligado': tempo_ligado,
             'Tempo Ocioso': tempo_ocioso
@@ -594,47 +676,23 @@ def calcular_uso_gps(df_base, base_calculo):
     Agrega os dados por operador, calculando a média ponderada quando um operador aparece em múltiplas frotas.
     
     Args:
-        df_base: DataFrame original com todos os dados
+        df_base: Não usado mais, mantido para compatibilidade
         base_calculo (DataFrame): Tabela Base Calculo
     
     Returns:
         DataFrame: Percentual de uso de GPS por operador (agregado)
     """
-    # Mapear RTK (Piloto Automatico) para valores numéricos (1 para Sim, 0 para Não)
-    df_temp = df_base.copy()
+    # Agrupar por operador e calcular a média ponderada
+    agrupado = base_calculo.groupby('Operador').agg({
+        'RTK': 'sum',
+        'Horas Produtivas': 'sum'
+    }).reset_index()
     
-    # Verificar se a coluna existe e converter para valores numéricos
-    if 'RTK (Piloto Automatico)' in df_temp.columns:
-        # Fazer o mapeamento de valores textuais para 0/1
-        df_temp['RTK (Piloto Automatico)'] = df_temp['RTK (Piloto Automatico)'].apply(lambda x: 
-            1 if x in [1, '1', 'SIM', 'Sim', 'sim', 'VERDADEIRO', 'TRUE', 'True', 'LIGADO', True] 
-            else 0
-        )
-    
-    # Calcular o uso do GPS considerando apenas registros produtivos com RTK ativo
     resultados = []
-    operadores = df_temp['Operador'].unique()
-    
-    for operador in operadores:
-        # Filtrar dados para este operador
-        dados_op = df_temp[df_temp['Operador'] == operador]
-        
-        # Tempo com RTK ativo em operações produtivas
-        tempo_rtk = dados_op[
-            (dados_op['RTK (Piloto Automatico)'] == 1) & 
-            (dados_op['Grupo Operacao'] == 'Produtiva')
-        ]['Diferença_Hora'].sum()
-        
-        # Tempo total em operações produtivas
-        tempo_produtivo = dados_op[
-            dados_op['Grupo Operacao'] == 'Produtiva'
-        ]['Diferença_Hora'].sum()
-        
-        # Calcular porcentagem
-        porcentagem = tempo_rtk / tempo_produtivo if tempo_produtivo > 0 else 0
-        
+    for _, row in agrupado.iterrows():
+        porcentagem = row['RTK'] / row['Horas Produtivas'] if row['Horas Produtivas'] > 0 else 0
         resultados.append({
-            'Operador': operador,
+            'Operador': row['Operador'],
             'Porcentagem': porcentagem
         })
     
@@ -724,9 +782,11 @@ def identificar_operadores_duplicados(df):
         if ' - ' in op:
             try:
                 id_parte, nome_parte = op.split(' - ', 1)
-                if nome_parte not in nomes_para_ids:
-                    nomes_para_ids[nome_parte] = []
-                nomes_para_ids[nome_parte].append(op)
+                # Normalizar nome para comparação (maiúsculo e sem espaços extras)
+                nome_normalizado = nome_parte.upper().strip()
+                if nome_normalizado not in nomes_para_ids:
+                    nomes_para_ids[nome_normalizado] = []
+                nomes_para_ids[nome_normalizado].append(op)
             except:
                 continue
     
@@ -736,27 +796,265 @@ def identificar_operadores_duplicados(df):
     
     for nome, ids in nomes_para_ids.items():
         if len(ids) > 1:
-            # Verificar se uma das IDs inicia com 133 e tem 7 dígitos
-            ids_longas = [id_op for id_op in ids if ' - ' in id_op and id_op.split(' - ')[0].startswith('133') and len(id_op.split(' - ')[0]) == 7]
-            ids_curtas = [id_op for id_op in ids if id_op not in ids_longas]
+            print(f"Encontrado operador duplicado: {nome} com {len(ids)} IDs diferentes")
             
-            if ids_longas and ids_curtas:
-                for id_longa in ids_longas:
-                    # Encontrar a ID correta (a mais curta)
-                    id_correta = min(ids_curtas, key=lambda x: len(x.split(' - ')[0]) if ' - ' in x else float('inf'))
+            # Separar IDs que começam com '133' e têm 7 dígitos
+            ids_suspeitas = [id_op for id_op in ids if ' - ' in id_op and id_op.split(' - ')[0].startswith('133') and len(id_op.split(' - ')[0]) == 7]
+            ids_normais = [id_op for id_op in ids if id_op not in ids_suspeitas]
+            
+            # Se temos IDs suspeitas e normais, considerar a suspeita como incorreta
+            if ids_suspeitas and ids_normais:
+                for id_suspeita in ids_suspeitas:
+                    # Usar a ID normal mais curta como destino (geralmente a correta)
+                    id_correta = min(ids_normais, key=lambda x: len(x.split(' - ')[0]) if ' - ' in x else float('inf'))
                     
                     # Adicionar ao mapeamento
-                    mapeamento[id_longa] = id_correta
+                    mapeamento[id_suspeita] = id_correta
+                    
+                    # Extrair as partes para o relatório
+                    id_incorreta_parte = id_suspeita.split(' - ')[0]
+                    id_correta_parte = id_correta.split(' - ')[0]
+                    
+                    print(f"  - Mapeando: {id_suspeita} -> {id_correta}")
                     
                     # Adicionar à lista de duplicidades para o relatório
                     duplicidades.append({
-                        'ID Incorreta': id_longa,
+                        'ID Incorreta': id_suspeita,
                         'ID Correta': id_correta,
                         'Nome': nome
                     })
+            
+            # Caso especial: todas as IDs são suspeitas ou todas são normais
+            # Neste caso, apresentamos no relatório mas não fazemos substituição automática
+            else:
+                print(f"  - Múltiplas IDs do mesmo tipo encontradas para {nome}, sem ação automática")
+                # Ainda assim, adicionar ao relatório para conhecimento
+                for i, id1 in enumerate(ids):
+                    for id2 in ids[i+1:]:
+                        duplicidades.append({
+                            'ID Incorreta': id1, 
+                            'ID Correta': id2,
+                            'Nome': nome,
+                            'Observação': "Duplicidade detectada, verificar manualmente"
+                        })
     
     print(f"Encontrados {len(duplicidades)} operadores com IDs duplicadas.")
     return mapeamento, pd.DataFrame(duplicidades)
+
+def calcular_horas_motor_ligado_total(df):
+    """
+    Calcula o total de horas com motor ligado por frota durante todo o período,
+    e também a média diária.
+    Usa a coluna 'Diferença_Hora' para calcular o tempo real com motor ligado.
+    
+    Args:
+        df (DataFrame): DataFrame com os dados de operação
+        
+    Returns:
+        DataFrame: DataFrame com o total de horas com motor ligado por frota e a média diária
+    """
+    try:
+        # Verificar se as colunas necessárias existem
+        if 'Data' not in df.columns:
+            print("Aviso: Coluna 'Data' não encontrada. Usando o número total de registros como divisor.")
+            # Criar uma coluna temporária para calcular as horas com motor ligado
+            df_temp = df.copy()
+            df_temp['Horas_Motor_Ligado'] = df_temp.apply(
+                lambda row: row['Diferença_Hora'] if row['Motor Ligado'] == 1 else 0, 
+                axis=1
+            )
+            
+            # Agrupa por frota e soma as horas com motor ligado
+            df_horas_motor = df_temp.groupby('Equipamento').agg({
+                'Horas_Motor_Ligado': 'sum'
+            }).reset_index()
+            
+            # Renomeia a coluna para maior clareza
+            df_horas_motor.columns = ['Frota', 'Total Horas Motor Ligado']
+            
+            # Ordena pelo total de horas (decrescente)
+            df_horas_motor = df_horas_motor.sort_values('Total Horas Motor Ligado', ascending=False)
+            
+            return df_horas_motor
+        
+        # Criar uma coluna temporária para calcular as horas com motor ligado
+        df_temp = df.copy()
+        df_temp['Horas_Motor_Ligado'] = df_temp.apply(
+            lambda row: row['Diferença_Hora'] if row['Motor Ligado'] == 1 else 0, 
+            axis=1
+        )
+        
+        # Agrupa por frota e calcula o total de horas com motor ligado e o número de dias
+        df_horas_motor = df_temp.groupby('Equipamento').agg({
+            'Horas_Motor_Ligado': 'sum',
+            'Data': 'nunique'  # Conta o número de dias únicos para cada frota
+        }).reset_index()
+        
+        # Renomeia as colunas para maior clareza
+        df_horas_motor.columns = ['Frota', 'Total Horas Motor Ligado', 'Dias Registrados']
+        
+        # Calcula a média diária de horas com motor ligado
+        df_horas_motor['Horas Motor Ligado por Dia'] = df_horas_motor['Total Horas Motor Ligado'] / df_horas_motor['Dias Registrados']
+        
+        # Ordena pelo total de horas (decrescente)
+        df_horas_motor = df_horas_motor.sort_values('Total Horas Motor Ligado', ascending=False)
+        
+        # Mantém todas as colunas relevantes
+        df_horas_motor = df_horas_motor[['Frota', 'Total Horas Motor Ligado', 'Horas Motor Ligado por Dia', 'Dias Registrados']]
+        
+        return df_horas_motor
+        
+    except Exception as e:
+        print(f"Erro ao calcular horas totais de motor ligado: {str(e)}")
+        return pd.DataFrame(columns=['Frota', 'Total Horas Motor Ligado', 'Horas Motor Ligado por Dia', 'Dias Registrados'])
+
+def criar_planilha_tdh(df):
+    """
+    Cria uma planilha vazia para TDH, contendo apenas as frotas encontradas.
+    
+    Args:
+        df (DataFrame): DataFrame com os dados
+        
+    Returns:
+        DataFrame: DataFrame vazio com as colunas 'Frota' e 'TDH'
+    """
+    # Obter todas as frotas únicas
+    frotas = df['Equipamento'].unique()
+    
+    # Criar DataFrame vazio com as frotas
+    df_tdh = pd.DataFrame({'Frota': frotas, 'TDH': ''})
+    
+    return df_tdh
+
+def criar_planilha_diesel(df):
+    """
+    Cria uma planilha vazia para Diesel, contendo apenas as frotas encontradas.
+    
+    Args:
+        df (DataFrame): DataFrame com os dados
+        
+    Returns:
+        DataFrame: DataFrame vazio com as colunas 'Frota' e 'Diesel'
+    """
+    # Obter todas as frotas únicas
+    frotas = df['Equipamento'].unique()
+    
+    # Criar DataFrame vazio com as frotas
+    df_diesel = pd.DataFrame({'Frota': frotas, 'Diesel': ''})
+    
+    return df_diesel
+
+def criar_planilha_impureza(df):
+    """
+    Cria uma planilha vazia para Impureza Vegetal, contendo apenas as frotas encontradas.
+    
+    Args:
+        df (DataFrame): DataFrame com os dados
+        
+    Returns:
+        DataFrame: DataFrame vazio com as colunas 'Frota' e 'Impureza'
+    """
+    # Obter todas as frotas únicas
+    frotas = df['Equipamento'].unique()
+    
+    # Criar DataFrame vazio com as frotas
+    df_impureza = pd.DataFrame({'Frota': frotas, 'Impureza': ''})
+    
+    return df_impureza
+
+def calcular_ofensores(df):
+    """
+    Calcula os top 5 ofensores gerais.
+    Agrupa apenas por Operacao onde Estado Operacional é 'PARADA',
+    soma a Diferença_Hora, classifica do maior para o menor e seleciona os top 5.
+    
+    Args:
+        df (DataFrame): DataFrame com os dados
+        
+    Returns:
+        DataFrame: DataFrame com os top 5 ofensores gerais
+    """
+    # Filtrar apenas os registros com Estado Operacional PARADA
+    df_paradas = df[df['Estado Operacional'] == 'PARADA'].copy()
+    
+    # Se não houver dados de parada, retornar DataFrame vazio
+    if len(df_paradas) == 0:
+        return pd.DataFrame(columns=['Operação', 'Tempo', 'Porcentagem'])
+    
+    # Agrupar apenas por Operacao, somar o tempo
+    paradas_agrupadas = df_paradas.groupby('Operacao')['Diferença_Hora'].sum().reset_index()
+    
+    # Calcular o tempo total de todas as paradas
+    tempo_total = paradas_agrupadas['Diferença_Hora'].sum()
+    
+    # Adicionar coluna de porcentagem
+    paradas_agrupadas['Porcentagem'] = paradas_agrupadas.apply(
+        lambda row: row['Diferença_Hora'] / tempo_total if tempo_total > 0 else 0,
+        axis=1
+    )
+    
+    # Ordenar por tempo (decrescente)
+    paradas_agrupadas = paradas_agrupadas.sort_values(by='Diferença_Hora', ascending=False)
+    
+    # Selecionar os top 5 gerais
+    resultado = paradas_agrupadas.head(5)
+    
+    # Renomear colunas para melhor visualização
+    resultado = resultado.rename(columns={
+        'Operacao': 'Operação',
+        'Diferença_Hora': 'Tempo'
+    })
+    
+    return resultado
+
+def criar_planilha_coordenadas(df_base):
+    """
+    Cria uma planilha com coordenadas das frotas, ordenada por hora e por frota.
+    
+    Args:
+        df_base (DataFrame): DataFrame com os dados base
+        
+    Returns:
+        DataFrame: DataFrame com as colunas Frota, Hora, Latitude e Longitude
+    """
+    # Verificar se as colunas necessárias existem
+    colunas_necessarias = ['Equipamento', 'Hora', 'Latitude', 'Longitude']
+    for coluna in colunas_necessarias:
+        if coluna not in df_base.columns:
+            print(f"Aviso: Coluna '{coluna}' não encontrada para criar planilha de coordenadas.")
+            # Criar um DataFrame vazio com as colunas necessárias
+            return pd.DataFrame(columns=['Frota', 'Hora', 'Latitude', 'Longitude'])
+    
+    # Criar um novo DataFrame apenas com as colunas necessárias
+    df_coordenadas = df_base[colunas_necessarias].copy()
+    
+    # Renomear a coluna Equipamento para Frota
+    df_coordenadas.rename(columns={'Equipamento': 'Frota'}, inplace=True)
+    
+    # Garantir que a coluna Hora esteja no formato correto (hh:mm:ss)
+    if df_coordenadas['Hora'].dtype == 'datetime64[ns]':
+        df_coordenadas['Hora'] = df_coordenadas['Hora'].dt.strftime('%H:%M:%S')
+    
+    # Ordenar por Frota (como texto) e por Hora
+    df_coordenadas['Frota'] = df_coordenadas['Frota'].astype(str)
+    
+    # Certificar que podemos ordenar por hora (convertendo temporariamente)
+    df_coordenadas['Hora_temp'] = pd.to_datetime(df_coordenadas['Hora'], format='%H:%M:%S', errors='coerce')
+    df_coordenadas = df_coordenadas.sort_values(['Frota', 'Hora_temp'])
+    df_coordenadas.drop('Hora_temp', axis=1, inplace=True)
+    
+    # Garantir que as coordenadas sejam numéricas
+    df_coordenadas['Latitude'] = pd.to_numeric(df_coordenadas['Latitude'], errors='coerce')
+    df_coordenadas['Longitude'] = pd.to_numeric(df_coordenadas['Longitude'], errors='coerce')
+    
+    # Formatar as coordenadas como strings com ponto decimal
+    df_coordenadas['Latitude'] = df_coordenadas['Latitude'].apply(lambda x: f"{x:.9f}" if pd.notnull(x) else '')
+    df_coordenadas['Longitude'] = df_coordenadas['Longitude'].apply(lambda x: f"{x:.9f}" if pd.notnull(x) else '')
+    
+    # Remover duplicatas completas para reduzir tamanho da planilha
+    df_coordenadas = df_coordenadas.drop_duplicates()
+    
+    return df_coordenadas
 
 def criar_excel_com_planilhas(df_base, base_calculo, disp_mecanica, eficiencia_energetica,
                             hora_elevador, motor_ocioso, uso_gps, horas_por_frota, caminho_saida,
@@ -780,6 +1078,20 @@ def criar_excel_com_planilhas(df_base, base_calculo, disp_mecanica, eficiencia_e
             max_length = min(max_length, 40)
             worksheet.column_dimensions[column].width = max_length
     
+    # Calcular horas totais de motor ligado por frota
+    df_horas_motor_total = calcular_horas_motor_ligado_total(df_base)
+    
+    # Criar planilhas adicionais
+    df_tdh = criar_planilha_tdh(df_base)
+    df_diesel = criar_planilha_diesel(df_base)
+    df_impureza = criar_planilha_impureza(df_base)
+    
+    # Criar planilha de coordenadas
+    df_coordenadas = criar_planilha_coordenadas(df_base)
+    
+    # Calcular ofensores
+    df_ofensores = calcular_ofensores(df_base)
+    
     with pd.ExcelWriter(caminho_saida, engine='openpyxl') as writer:
         # Salvar cada DataFrame em uma planilha separada
         df_base.to_excel(writer, sheet_name='BASE', index=False)
@@ -796,6 +1108,20 @@ def criar_excel_com_planilhas(df_base, base_calculo, disp_mecanica, eficiencia_e
         
         uso_gps.to_excel(writer, sheet_name='5_Uso GPS', index=False)
         horas_por_frota.to_excel(writer, sheet_name='Horas por Frota', index=False)
+        
+        # Adicionar a nova planilha com horas totais de motor ligado
+        df_horas_motor_total.to_excel(writer, sheet_name='Horas Motor', index=False)
+        
+        # Adicionar nova planilha de ofensores
+        df_ofensores.to_excel(writer, sheet_name='Ofensores', index=False)
+        
+        # Adicionar novas planilhas
+        df_tdh.to_excel(writer, sheet_name='TDH', index=False)
+        df_diesel.to_excel(writer, sheet_name='Diesel', index=False)
+        df_impureza.to_excel(writer, sheet_name='Impureza Vegetal', index=False)
+        
+        # Adicionar planilha de coordenadas
+        df_coordenadas.to_excel(writer, sheet_name='Coordenadas', index=False)
         
         if media_velocidade is None:
             media_velocidade = pd.DataFrame(columns=['Operador', 'Velocidade'])
@@ -853,11 +1179,80 @@ def criar_excel_com_planilhas(df_base, base_calculo, disp_mecanica, eficiencia_e
                         cell = worksheet.cell(row=row, column=col)
                         cell.number_format = '0.00'
             
+            elif sheet_name == 'Ofensores':
+                for row in range(2, worksheet.max_row + 1):
+                    # Coluna B (Tempo)
+                    cell = worksheet.cell(row=row, column=2)
+                    cell.number_format = '0.00'  # Formato decimal
+                    
+                    # Coluna C (Porcentagem)
+                    cell = worksheet.cell(row=row, column=3)
+                    cell.number_format = '0.00%'  # Formato percentual
+            
+            elif sheet_name == 'Horas Motor':
+                for row in range(2, worksheet.max_row + 1):
+                    cell = worksheet.cell(row=row, column=2)  # Coluna B (Total Horas Motor Ligado)
+                    cell.number_format = '0.00'
+                    cell = worksheet.cell(row=row, column=3)  # Coluna C (Horas Motor Ligado por Dia)
+                    cell.number_format = '0.00'
+                    cell = worksheet.cell(row=row, column=4)  # Coluna D (Dias Registrados)
+                    cell.number_format = '0'
+            
+            elif sheet_name == 'TDH':
+                for row in range(2, worksheet.max_row + 1):
+                    cell = worksheet.cell(row=row, column=2)  # Coluna B (TDH)
+                    cell.number_format = '0.0000'  # 4 casas decimais
+            
+            elif sheet_name == 'Diesel':
+                for row in range(2, worksheet.max_row + 1):
+                    cell = worksheet.cell(row=row, column=2)  # Coluna B (Diesel)
+                    cell.number_format = '0.0000'  # 4 casas decimais
+            
+            elif sheet_name == 'Impureza Vegetal':
+                for row in range(2, worksheet.max_row + 1):
+                    cell = worksheet.cell(row=row, column=2)  # Coluna B (Impureza)
+                    cell.number_format = '0.00'  # 2 casas decimais
+            
+            elif sheet_name == 'Coordenadas':
+                # Formatar coluna Hora como hora
+                for row in range(2, worksheet.max_row + 1):
+                    cell = worksheet.cell(row=row, column=2)  # Coluna B (Hora)
+                    cell.number_format = 'hh:mm:ss'
+                    # Formatar coordenadas com 6 casas decimais
+                    cell = worksheet.cell(row=row, column=3)  # Coluna C (Latitude)
+                    cell.number_format = '0.000000'
+                    cell = worksheet.cell(row=row, column=4)  # Coluna D (Longitude)
+                    cell.number_format = '0.000000'
+            
             elif sheet_name == 'Base Calculo':
                 colunas_porcentagem = ['%', '% Utilização RTK', '% Eficiência Elevador', '% Parado com motor ligado']
                 colunas_tempo = ['Horas totais', 'Horas elevador', 'RTK', 'Horas Produtivas', 'Motor Ligado', 'Parado Com Motor Ligado']
                 
-                for row in range(2, worksheet.max_row + 1):
+                # Adicionar uma nota explicativa sobre o método avançado de cálculo
+                max_row = worksheet.max_row
+                nota_row = max_row + 3  # Deixar algumas linhas em branco
+                
+                # Título
+                cell = worksheet.cell(row=nota_row, column=1)
+                cell.value = "MÉTODO AVANÇADO DE CÁLCULO DE MOTOR OCIOSO"
+                cell.font = Font(bold=True, size=12)
+                
+                # Descrição do método
+                worksheet.cell(row=nota_row + 2, column=1).value = "Regras aplicadas:"
+                worksheet.cell(row=nota_row + 3, column=1).value = "1. Tolerância de 1 minuto aplicada a cada sequência de paradas"
+                worksheet.cell(row=nota_row + 4, column=1).value = "2. Sequências de paradas com menos de 1 minuto são ignoradas"
+                worksheet.cell(row=nota_row + 5, column=1).value = "3. Paradas de motor com velocidade zero são agrupadas em intervalos"
+                worksheet.cell(row=nota_row + 7, column=1).value = "Obs: Os valores na coluna 'Parado Com Motor Ligado' já refletem este método avançado"
+                
+                # Formatar a nota
+                for r in range(nota_row, nota_row + 8):
+                    cell = worksheet.cell(row=r, column=1)
+                    cell.font = Font(size=10)
+                    if r == nota_row + 7:  # A observação em itálico
+                        cell.font = Font(size=10, italic=True)
+                
+                # Formatar as células de dados
+                for row in range(2, max_row + 1):
                     for col in range(1, worksheet.max_column + 1):
                         header = worksheet.cell(row=1, column=col).value
                         cell = worksheet.cell(row=row, column=col)
@@ -866,6 +1261,91 @@ def criar_excel_com_planilhas(df_base, base_calculo, disp_mecanica, eficiencia_e
                             cell.number_format = '0.00%'
                         elif header in colunas_tempo:
                             cell.number_format = '0.00'
+
+def processar_arquivo(caminho_arquivo, diretorio_saida):
+    """
+    Processa um único arquivo e gera o Excel de saída.
+    
+    Args:
+        caminho_arquivo (str): Caminho do arquivo a ser processado
+        diretorio_saida (str): Diretório onde o arquivo de saída será salvo
+    """
+    # Obter apenas o nome do arquivo (sem caminho e sem extensão)
+    nome_base = os.path.splitext(os.path.basename(caminho_arquivo))[0]
+    
+    # Nome de saída igual ao original, mas com "-rastros" no final e extensão .xlsx na pasta output
+    arquivo_saida = os.path.join(diretorio_saida, f"{nome_base}-rastros.xlsx")
+    
+    print(f"\nProcessando arquivo: {os.path.basename(caminho_arquivo)}")
+    print(f"Arquivo de saída: {os.path.basename(arquivo_saida)}")
+    
+    # Processar o arquivo base
+    df_base = processar_arquivo_base(caminho_arquivo)
+    if df_base is None:
+        print(f"Erro ao processar {os.path.basename(caminho_arquivo)}. Pulando para o próximo arquivo.")
+        return
+    
+    # Identificar operadores duplicados antes de aplicar as substituições manuais
+    mapeamento_duplicados, df_duplicados = identificar_operadores_duplicados(df_base)
+    
+    # Carregar e aplicar substituições de operadores (manuais + automáticas)
+    substituicoes = carregar_substituicoes_operadores()
+    substituicoes_horario = carregar_substituicoes_operadores_horario()
+    
+    # Combinar as substituições manuais com as automáticas (automáticas têm precedência)
+    substituicoes_combinadas = {**substituicoes, **mapeamento_duplicados}
+    
+    print("\n=== APLICANDO SUBSTITUIÇÕES DE OPERADORES ===")
+    if substituicoes_combinadas or substituicoes_horario:
+        df_base, df_substituicoes = aplicar_substituicao_operadores(df_base, substituicoes_combinadas, substituicoes_horario)
+    else:
+        df_substituicoes = pd.DataFrame(columns=['ID Original', 'Nome Original', 'ID Nova', 'Nome Novo', 'Registros Afetados'])
+    print("=== FIM DAS SUBSTITUIÇÕES ===\n")
+    
+    # Se o DataFrame estiver vazio, gerar apenas a planilha BASE
+    if len(df_base) == 0:
+        with pd.ExcelWriter(arquivo_saida, engine='openpyxl') as writer:
+            df_base.to_excel(writer, sheet_name='BASE', index=False)
+            if not df_duplicados.empty:
+                df_duplicados.to_excel(writer, sheet_name='IDs Duplicadas', index=False)
+        print(f"Arquivo {arquivo_saida} gerado com apenas a planilha BASE (sem dados).")
+        return
+    
+    # ORDENAR o DataFrame base por Equipamento e depois por Hora
+    # Isso garante que os registros sejam agrupados por frota na visualização
+    if 'Data' in df_base.columns:
+        # Ordenar por Equipamento, Data e depois Hora
+        df_base = df_base.sort_values(by=['Equipamento', 'Data', 'Hora'])
+    else:
+        # Se não tiver Data, ordenar apenas por Equipamento e Hora
+        df_base = df_base.sort_values(by=['Equipamento', 'Hora'])
+    
+    # Calcular a Base Calculo com os operadores já substituídos
+    print("Calculando Base Calculo com operadores consolidados...")
+    base_calculo = calcular_base_calculo(df_base)
+    
+    # Calcular as métricas auxiliares
+    print("Calculando métricas auxiliares com operadores consolidados...")
+    disp_mecanica = calcular_disponibilidade_mecanica(df_base)
+    eficiencia_energetica = calcular_eficiencia_energetica(base_calculo)
+    hora_elevador = calcular_hora_elevador(df_base, base_calculo)
+    motor_ocioso = calcular_motor_ocioso(base_calculo, df_base)
+    uso_gps = calcular_uso_gps(df_base, base_calculo)
+    horas_por_frota = calcular_horas_por_frota(df_base)
+    
+    # Calcular média de velocidade por operador
+    media_velocidade = calcular_media_velocidade(df_base)
+    
+    # Criar o arquivo Excel com todas as planilhas
+    criar_excel_com_planilhas(
+        df_base, base_calculo, disp_mecanica, eficiencia_energetica,
+        hora_elevador, motor_ocioso, uso_gps, horas_por_frota, arquivo_saida,
+        df_duplicados,  # Adicionar a tabela de IDs duplicadas
+        media_velocidade,  # Adicionar a tabela de média de velocidade
+        df_substituicoes  # Adicionar a tabela de IDs substituídas
+    )
+    
+    print(f"Arquivo {arquivo_saida} gerado com sucesso!")
 
 def extrair_arquivo_zip(caminho_zip, pasta_destino=None):
     """
@@ -927,9 +1407,11 @@ def extrair_arquivo_zip(caminho_zip, pasta_destino=None):
         # Se houve erro e criamos uma pasta temporária, tentar limpá-la
         if pasta_temp:
             try:
+                print(f"Removendo pasta temporária: {pasta_temp}")
                 shutil.rmtree(pasta_temp)
-            except:
-                pass
+                print(f"Pasta temporária removida com sucesso")
+            except Exception as e:
+                print(f"Erro ao remover pasta temporária {pasta_temp}: {str(e)}")
         return [], None
 
 def processar_todos_arquivos():
@@ -937,20 +1419,28 @@ def processar_todos_arquivos():
     Processa todos os arquivos TXT, CSV ou ZIP de colhedoras na pasta dados.
     Ignora arquivos que contenham "transbordo" no nome.
     """
+    print("\nIniciando processamento de arquivos...")
+    
     # Obter o diretório onde está o script
     diretorio_script = os.path.dirname(os.path.abspath(__file__))
+    print(f"Diretório do script: {diretorio_script}")
     
     # Diretório raiz do projeto
     diretorio_raiz = os.path.dirname(diretorio_script)
+    print(f"Diretório raiz: {diretorio_raiz}")
     
     # Diretórios para dados de entrada e saída
     diretorio_dados = os.path.join(diretorio_raiz, "dados")
     diretorio_saida = os.path.join(diretorio_raiz, "output")
+    print(f"Diretório de dados: {diretorio_dados}")
+    print(f"Diretório de saída: {diretorio_saida}")
     
     # Verificar se os diretórios existem, caso contrário criar
     if not os.path.exists(diretorio_dados):
+        print(f"Criando diretório de dados: {diretorio_dados}")
         os.makedirs(diretorio_dados)
     if not os.path.exists(diretorio_saida):
+        print(f"Criando diretório de saída: {diretorio_saida}")
         os.makedirs(diretorio_saida)
     
     # Encontrar todos os arquivos TXT/CSV/ZIP de colhedoras
@@ -973,6 +1463,10 @@ def processar_todos_arquivos():
     arquivos_zip += glob.glob(os.path.join(diretorio_dados, "*colhedora*.zip"))
     arquivos_zip += glob.glob(os.path.join(diretorio_dados, "colhedora*.zip"))
     
+    print("\nArquivos encontrados antes da filtragem:")
+    print(f"TXT/CSV: {[os.path.basename(a) for a in arquivos]}")
+    print(f"ZIP: {[os.path.basename(a) for a in arquivos_zip]}")
+    
     # Filtrar arquivos que contenham "transbordo" no nome (case insensitive)
     arquivos = [arquivo for arquivo in arquivos if "transbordo" not in os.path.basename(arquivo).lower()]
     arquivos_zip = [arquivo for arquivo in arquivos_zip if "transbordo" not in os.path.basename(arquivo).lower()]
@@ -981,15 +1475,20 @@ def processar_todos_arquivos():
     arquivos = list(set(arquivos))
     arquivos_zip = list(set(arquivos_zip))
     
+    print("\nArquivos encontrados após a filtragem:")
+    print(f"TXT/CSV: {[os.path.basename(a) for a in arquivos]}")
+    print(f"ZIP: {[os.path.basename(a) for a in arquivos_zip]}")
+    
     if not arquivos and not arquivos_zip:
         print("Nenhum arquivo de colhedoras encontrado na pasta dados!")
         return
     
-    print(f"Encontrados {len(arquivos)} arquivos de colhedoras (TXT/CSV) para processar.")
+    print(f"\nEncontrados {len(arquivos)} arquivos de colhedoras (TXT/CSV) para processar.")
     print(f"Encontrados {len(arquivos_zip)} arquivos ZIP de colhedoras para processar.")
     
     # Processar cada arquivo TXT/CSV
     for arquivo in arquivos:
+        print(f"\nProcessando arquivo TXT/CSV: {os.path.basename(arquivo)}")
         processar_arquivo(arquivo, diretorio_saida)
     
     # Processar cada arquivo ZIP
@@ -997,27 +1496,34 @@ def processar_todos_arquivos():
         print(f"\nProcessando arquivo ZIP: {os.path.basename(arquivo_zip)}")
         
         # Extrair arquivo ZIP para pasta temporária
+        print(f"Extraindo arquivo ZIP: {arquivo_zip}")
         arquivos_extraidos, pasta_temp = extrair_arquivo_zip(arquivo_zip)
         
         if not arquivos_extraidos:
             print(f"Nenhum arquivo TXT ou CSV encontrado no ZIP {os.path.basename(arquivo_zip)}")
             continue
         
-        print(f"Extraídos {len(arquivos_extraidos)} arquivos do ZIP.")
+        print(f"Extraídos {len(arquivos_extraidos)} arquivos do ZIP:")
+        for arquivo in arquivos_extraidos:
+            print(f"  - {os.path.basename(arquivo)}")
         
         # Processar cada arquivo extraído
         for arquivo_extraido in arquivos_extraidos:
             # Filtrar arquivos que contenham "transbordo" no nome
             if "transbordo" not in os.path.basename(arquivo_extraido).lower():
+                print(f"\nProcessando arquivo extraído: {os.path.basename(arquivo_extraido)}")
                 processar_arquivo(arquivo_extraido, diretorio_saida)
         
         # Limpar pasta temporária se foi criada
         if pasta_temp:
             try:
+                print(f"Removendo pasta temporária: {pasta_temp}")
                 shutil.rmtree(pasta_temp)
-                print(f"Pasta temporária removida: {pasta_temp}")
+                print(f"Pasta temporária removida com sucesso")
             except Exception as e:
                 print(f"Erro ao remover pasta temporária {pasta_temp}: {str(e)}")
+    
+    print("\nProcessamento de todos os arquivos concluído!")
 
 def carregar_substituicoes_operadores():
     """
@@ -1057,18 +1563,78 @@ def carregar_substituicoes_operadores():
         print(f"Erro ao carregar arquivo de substituição de operadores: {str(e)}")
         return {}
 
-def aplicar_substituicao_operadores(df, mapeamento_substituicoes):
+def carregar_substituicoes_operadores_horario():
+    """
+    Carrega o arquivo substituiroperadores_horario.json que contém os mapeamentos 
+    de substituição de operadores com intervalos de horário.
+    
+    Returns:
+        list: Lista de dicionários com mapeamentos 
+              {operador_origem, operador_destino, hora_inicio, hora_fim, frota_origem}
+        ou lista vazia se o arquivo não existir ou for inválido.
+        O campo frota_origem é opcional:
+        - Se presente e não vazio, a substituição é aplicada apenas a registros daquela frota específica
+        - Se ausente ou vazio, a substituição é aplicada a todos os registros do operador
+    """
+    # Obter o diretório onde está o script
+    diretorio_script = os.path.dirname(os.path.abspath(__file__))
+    
+    # Diretório raiz do projeto
+    diretorio_raiz = os.path.dirname(diretorio_script)
+    
+    # Caminho para o arquivo de substituição
+    arquivo_substituicao = os.path.join(diretorio_raiz, "config", "substituiroperadores_horario.json")
+    
+    # Verificar se o arquivo existe
+    if not os.path.exists(arquivo_substituicao):
+        print(f"Arquivo de substituição de operadores com horário não encontrado: {arquivo_substituicao}")
+        return []
+    
+    try:
+        # Carregar o arquivo JSON
+        with open(arquivo_substituicao, 'r', encoding='utf-8') as f:
+            substituicoes = json.load(f)
+        
+        # Converter strings de hora para objetos datetime.time
+        for item in substituicoes:
+            if 'hora_inicio' in item and isinstance(item['hora_inicio'], str):
+                hora_str = item['hora_inicio']
+                # Adicionar segundos se não estiverem presentes
+                if len(hora_str.split(':')) == 2:
+                    hora_str += ':00'
+                item['hora_inicio_obj'] = datetime.strptime(hora_str, '%H:%M:%S').time()
+            
+            if 'hora_fim' in item and isinstance(item['hora_fim'], str):
+                hora_str = item['hora_fim']
+                # Adicionar segundos se não estiverem presentes
+                if len(hora_str.split(':')) == 2:
+                    hora_str += ':00'
+                item['hora_fim_obj'] = datetime.strptime(hora_str, '%H:%M:%S').time()
+        
+        print(f"Carregadas {len(substituicoes)} substituições de operadores com intervalos de horário.")
+        return substituicoes
+        
+    except Exception as e:
+        print(f"Erro ao carregar arquivo de substituição de operadores com horário: {str(e)}")
+        return []
+
+def aplicar_substituicao_operadores(df, mapeamento_substituicoes, mapeamento_horario=None):
     """
     Aplica as substituições de operadores no DataFrame.
     
     Args:
         df (DataFrame): DataFrame a ser processado
         mapeamento_substituicoes (dict): Dicionário com mapeamento {operador_origem: operador_destino}
+        mapeamento_horario (list, optional): Lista de dicionários com mapeamentos
+            {operador_origem, operador_destino, hora_inicio, hora_fim, frota_origem}.
+            O campo frota_origem é opcional:
+            - Se presente e não vazio, a substituição é aplicada apenas a registros daquela frota específica
+            - Se ausente ou vazio, a substituição é aplicada a todos os registros do operador
     
     Returns:
         tuple: (DataFrame com substituições aplicadas, DataFrame com registro das substituições)
     """
-    if not mapeamento_substituicoes or 'Operador' not in df.columns:
+    if (not mapeamento_substituicoes and not mapeamento_horario) or 'Operador' not in df.columns:
         return df, pd.DataFrame(columns=['ID Original', 'Nome Original', 'ID Nova', 'Nome Novo', 'Registros Afetados'])
     
     # Criar uma cópia para não alterar o DataFrame original
@@ -1076,119 +1642,121 @@ def aplicar_substituicao_operadores(df, mapeamento_substituicoes):
     
     # Lista para armazenar as substituições realizadas
     substituicoes_realizadas = []
+    total_registros_substituidos = 0
     
-    # Contar operadores antes da substituição
-    contagem_antes = df_modificado['Operador'].value_counts()
+    # Verificar operadores antes da substituição para relatório
+    operadores_antes = df_modificado['Operador'].unique()
+    print(f"\nOperadores antes da substituição: {len(operadores_antes)}")
     
-    # Aplicar as substituições
-    df_modificado['Operador'] = df_modificado['Operador'].replace(mapeamento_substituicoes)
-    
-    # Contar operadores depois da substituição
-    contagem_depois = df_modificado['Operador'].value_counts()
-    
-    # Verificar quais operadores foram substituídos
-    for operador_origem, operador_destino in mapeamento_substituicoes.items():
-        if operador_origem in contagem_antes:
-            registros_afetados = contagem_antes.get(operador_origem, 0)
-            if registros_afetados > 0:
-                # Extrair IDs e nomes
-                id_original = operador_origem.split(' - ')[0] if ' - ' in operador_origem else operador_origem
-                nome_original = operador_origem.split(' - ')[1] if ' - ' in operador_origem else ''
-                id_nova = operador_destino.split(' - ')[0] if ' - ' in operador_destino else operador_destino
-                nome_novo = operador_destino.split(' - ')[1] if ' - ' in operador_destino else ''
+    # Aplicar as substituições por horário se disponíveis e se o DataFrame tiver coluna de data/hora
+    if mapeamento_horario and 'Data' in df_modificado.columns and 'Hora' in df_modificado.columns:
+        # Criar uma cópia backup dos operadores originais
+        df_modificado['Operador_Original'] = df_modificado['Operador'].copy()
+        
+        # Para cada linha no DataFrame
+        for idx, row in df_modificado.iterrows():
+            # Tenta extrair a hora do registro
+            try:
+                if isinstance(row['Hora'], str):
+                    hora_registro = datetime.strptime(row['Hora'], '%H:%M:%S').time()
+                elif isinstance(row['Hora'], datetime.time):
+                    hora_registro = row['Hora']
+                else:
+                    continue  # Pula se não conseguir converter
                 
-                substituicoes_realizadas.append({
-                    'ID Original': id_original,
-                    'Nome Original': nome_original,
-                    'ID Nova': id_nova,
-                    'Nome Novo': nome_novo,
-                    'Registros Afetados': registros_afetados
-                })
-                print(f"Operador '{operador_origem}' substituído por '{operador_destino}' em {registros_afetados} registros")
+                operador = row['Operador']
+                
+                # Verificar todas as regras de substituição por horário
+                for regra in mapeamento_horario:
+                    # Verificar se a condição básica é atendida: operador de origem correto e horário dentro do intervalo
+                    condicao_basica = (operador == regra['operador_origem'] and 
+                                      regra['hora_inicio_obj'] <= hora_registro <= regra['hora_fim_obj'])
+                    
+                    # Verificar condição de frota se ela existir na regra
+                    condicao_frota = True
+                    if 'frota_origem' in regra and regra['frota_origem'] and 'Equipamento' in df_modificado.columns:
+                        condicao_frota = (row['Equipamento'] == regra['frota_origem'])
+                    # Caso contrário, aplica a todos os registros do operador
+                    
+                    # Aplicar substituição apenas se ambas condições forem atendidas
+                    if condicao_basica and condicao_frota:
+                        # Aplicar a substituição
+                        df_modificado.at[idx, 'Operador'] = regra['operador_destino']
+                        break
+            except Exception as e:
+                print(f"Erro ao processar substituição com horário para linha {idx}: {str(e)}")
+        
+        # Contar substituições realizadas por horário
+        substituicoes_contagem = {}
+        for idx, row in df_modificado[df_modificado['Operador'] != df_modificado['Operador_Original']].iterrows():
+            origem = row['Operador_Original']
+            destino = row['Operador']
+            chave = (origem, destino)
+            if chave in substituicoes_contagem:
+                substituicoes_contagem[chave] += 1
+            else:
+                substituicoes_contagem[chave] = 1
+        
+        # Adicionar as substituições com horário à lista de substituições realizadas
+        for (origem, destino), count in substituicoes_contagem.items():
+            total_registros_substituidos += count
+            id_original = origem.split(' - ')[0] if ' - ' in origem else origem
+            nome_original = origem.split(' - ')[1] if ' - ' in origem else ''
+            id_nova = destino.split(' - ')[0] if ' - ' in destino else destino
+            nome_novo = destino.split(' - ')[1] if ' - ' in destino else ''
+            
+            substituicoes_realizadas.append({
+                'ID Original': id_original,
+                'Nome Original': nome_original,
+                'ID Nova': id_nova,
+                'Nome Novo': nome_novo,
+                'Registros Afetados': count,
+                'Por Horário': True
+            })
+            print(f"Operador '{origem}' substituído por '{destino}' em {count} registros (por horário)")
+        
+        # Remover a coluna temporária
+        df_modificado.drop('Operador_Original', axis=1, inplace=True)
+    
+    # Contar operadores e registros antes da substituição padrão
+    contagem_antes = df_modificado['Operador'].value_counts().to_dict()
+    
+    # Aplicar as substituições padrão (sem horário)
+    for origem, destino in mapeamento_substituicoes.items():
+        # Verificar se o operador de origem existe no DataFrame
+        registros_afetados = df_modificado[df_modificado['Operador'] == origem].shape[0]
+        
+        if registros_afetados > 0:
+            # Substituir o operador
+            df_modificado.loc[df_modificado['Operador'] == origem, 'Operador'] = destino
+            
+            total_registros_substituidos += registros_afetados
+            
+            # Extrair IDs e nomes
+            id_original = origem.split(' - ')[0] if ' - ' in origem else origem
+            nome_original = origem.split(' - ')[1] if ' - ' in origem else ''
+            id_nova = destino.split(' - ')[0] if ' - ' in destino else destino
+            nome_novo = destino.split(' - ')[1] if ' - ' in destino else ''
+            
+            substituicoes_realizadas.append({
+                'ID Original': id_original,
+                'Nome Original': nome_original,
+                'ID Nova': id_nova, 
+                'Nome Novo': nome_novo,
+                'Registros Afetados': registros_afetados,
+                'Por Horário': False
+            })
+            print(f"Operador '{origem}' substituído por '{destino}' em {registros_afetados} registros")
+    
+    # Verificar operadores após substituição
+    operadores_depois = df_modificado['Operador'].unique()
+    print(f"Operadores após substituição: {len(operadores_depois)}")
+    print(f"Total de registros substituídos: {total_registros_substituidos}")
     
     # Criar DataFrame com as substituições realizadas
     df_substituicoes = pd.DataFrame(substituicoes_realizadas)
     
     return df_modificado, df_substituicoes
-
-def processar_arquivo(caminho_arquivo, diretorio_saida):
-    """
-    Processa um único arquivo e gera o Excel de saída.
-    
-    Args:
-        caminho_arquivo (str): Caminho do arquivo a ser processado
-        diretorio_saida (str): Diretório onde o arquivo de saída será salvo
-    """
-    # Obter apenas o nome do arquivo (sem caminho e sem extensão)
-    nome_base = os.path.splitext(os.path.basename(caminho_arquivo))[0]
-    
-    # Nome de saída igual ao original, mas com extensão .xlsx na pasta output
-    arquivo_saida = os.path.join(diretorio_saida, f"{nome_base}.xlsx")
-    
-    print(f"\nProcessando arquivo: {os.path.basename(caminho_arquivo)}")
-    print(f"Arquivo de saída: {os.path.basename(arquivo_saida)}")
-    
-    # Processar o arquivo base
-    df_base = processar_arquivo_base(caminho_arquivo)
-    if df_base is None:
-        print(f"Erro ao processar {os.path.basename(caminho_arquivo)}. Pulando para o próximo arquivo.")
-        return
-    
-    # Identificar operadores duplicados antes de aplicar as substituições manuais
-    mapeamento_duplicados, df_duplicados = identificar_operadores_duplicados(df_base)
-    
-    # Carregar e aplicar substituições de operadores (manuais + automáticas)
-    substituicoes = carregar_substituicoes_operadores()
-    
-    # Combinar as substituições manuais com as automáticas (automáticas têm precedência)
-    substituicoes_combinadas = {**substituicoes, **mapeamento_duplicados}
-    
-    if substituicoes_combinadas:
-        df_base, df_substituicoes = aplicar_substituicao_operadores(df_base, substituicoes_combinadas)
-    
-    # Se o DataFrame estiver vazio, gerar apenas a planilha BASE
-    if len(df_base) == 0:
-        writer = pd.ExcelWriter(arquivo_saida, engine='openpyxl')
-        df_base.to_excel(writer, sheet_name='BASE', index=False)
-        if not df_duplicados.empty:
-            df_duplicados.to_excel(writer, sheet_name='IDs Duplicadas', index=False)
-        writer.close()
-        print(f"Arquivo {arquivo_saida} gerado com apenas a planilha BASE (sem dados).")
-        return
-    
-    # ORDENAR o DataFrame base por Equipamento e depois por Hora
-    # Isso garante que os registros sejam agrupados por frota na visualização
-    if 'Data' in df_base.columns:
-        # Ordenar por Equipamento, Data e depois Hora
-        df_base = df_base.sort_values(by=['Equipamento', 'Data', 'Hora'])
-    else:
-        # Se não tiver Data, ordenar apenas por Equipamento e Hora
-        df_base = df_base.sort_values(by=['Equipamento', 'Hora'])
-    
-    # Calcular a Base Calculo
-    base_calculo = calcular_base_calculo(df_base)
-    
-    # Calcular as métricas auxiliares
-    disp_mecanica = calcular_disponibilidade_mecanica(df_base)
-    eficiencia_energetica = calcular_eficiencia_energetica(base_calculo)
-    hora_elevador = calcular_hora_elevador(df_base, base_calculo)
-    motor_ocioso = calcular_motor_ocioso(base_calculo, df_base)
-    uso_gps = calcular_uso_gps(df_base, base_calculo)
-    horas_por_frota = calcular_horas_por_frota(df_base)
-    
-    # Calcular média de velocidade por operador
-    media_velocidade = calcular_media_velocidade(df_base)
-    
-    # Criar o arquivo Excel com todas as planilhas
-    criar_excel_com_planilhas(
-        df_base, base_calculo, disp_mecanica, eficiencia_energetica,
-        hora_elevador, motor_ocioso, uso_gps, horas_por_frota, arquivo_saida,
-        df_duplicados,  # Adicionar a tabela de IDs duplicadas
-        media_velocidade,  # Adicionar a tabela de média de velocidade
-        df_substituicoes  # Adicionar a tabela de IDs substituídas
-    )
-    
-    print(f"Arquivo {arquivo_saida} gerado com sucesso!")
 
 if __name__ == "__main__":
     print("="*80)
@@ -1197,6 +1765,18 @@ if __name__ == "__main__":
     print("Este script processa arquivos de colhedoras e gera planilhas Excel com métricas")
     print("Suporta arquivos TXT, CSV e ZIP")
     print("Ignorando arquivos que contenham 'transbordo' no nome")
+    print("="*50)
+    print("USANDO MÉTODO AVANÇADO DE CÁLCULO DE MOTOR OCIOSO")
+    print("- Tolerância de 1 minuto é aplicada a cada sequência de paradas")
+    print("- Sequências de paradas com menos de 1 minuto são ignoradas")
+    print("- Paradas de motor com velocidade zero são agrupadas em intervalos")
     print("="*80)
-    processar_todos_arquivos()
-    print("\nProcessamento concluído!") 
+    
+    try:
+        processar_todos_arquivos()
+        print("\nProcessamento concluído com sucesso!")
+    except Exception as e:
+        print(f"\nErro durante o processamento: {str(e)}")
+        print("Detalhes do erro:")
+        import traceback
+        traceback.print_exc() 

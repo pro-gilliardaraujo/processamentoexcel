@@ -41,7 +41,7 @@ COLUNAS_DESEJADAS = [
 ]
 
 # Valores a serem filtrados
-OPERADORES_EXCLUIR = ["9999 - TROCA DE TURNO"]
+OPERADORES_EXCLUIR = ["9999 - TROCA DE TURNO", "1 - SEM OPERADOR"]
 
 def carregar_config_calculos():
     """
@@ -280,6 +280,10 @@ def processar_arquivo_base(caminho_arquivo):
                 df['Horas Produtivas'] = pd.to_numeric(df['Horas Produtivas'].astype(str).str.strip(), errors='coerce')
                 df['Horas Produtivas'] = df['Horas Produtivas'].fillna(0)
             
+            # IMPORTANTE: Zerar horas produtivas dos operadores excluídos para garantir que não sejam contabilizadas
+            df.loc[df['Operador'].isin(OPERADORES_EXCLUIR), 'Horas Produtivas'] = 0
+            print(f"Total de horas produtivas após exclusão de operadores: {df['Horas Produtivas'].sum():.8f}")
+            
             # Coluna de GPS - Para transbordos, vamos considerar GPS quando houver "RTK (Piloto Automatico)" 
             # e Velocidade > 0 (se a coluna existir)
             if 'RTK (Piloto Automatico)' in df.columns:
@@ -288,6 +292,10 @@ def processar_arquivo_base(caminho_arquivo):
                     and row['Velocidade'] > 0 and row['Grupo Operacao'] == 'Produtiva' else 0,
                     axis=1
                 )
+                
+                # IMPORTANTE: Zerar GPS dos operadores excluídos para garantir que não sejam contabilizados  
+                df.loc[df['Operador'].isin(OPERADORES_EXCLUIR), 'GPS'] = 0
+                print(f"Total de horas com GPS ativo após exclusão de operadores: {df['GPS'].sum():.4f}")
             else:
                 # Se não tiver a coluna RTK, criar uma coluna GPS zerada
                 df['GPS'] = 0

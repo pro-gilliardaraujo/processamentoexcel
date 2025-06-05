@@ -634,68 +634,123 @@ def criar_dashboard(df_manobras, metricas):
 
 def criar_excel_com_metricas_manobras(df_base, df_manobras, df_metricas_gerais, metricas_agregadas, caminho_saida):
     """
-    Cria um arquivo Excel com todas as métricas de manobras calculadas.
+    Cria arquivo Excel com métricas de manobras.
+    Gera planilha BASE + planilhas auxiliares: Por Equipamento, Por Operador e Turno.
     """
     try:
-        # Tentar criar diretório de saída se não existir
-        os.makedirs(os.path.dirname(caminho_saida), exist_ok=True)
-        
         with pd.ExcelWriter(caminho_saida, engine='openpyxl') as writer:
-            # 1. Planilha de métricas gerais (resumo)
-            df_metricas_gerais.to_excel(writer, sheet_name='Resumo', index=False)
             
-            # 2. Planilhas com métricas agregadas por diferentes critérios
-            for nome_planilha, df_metricas in metricas_agregadas.items():
-                df_metricas.to_excel(writer, sheet_name=nome_planilha, index=False)
-                
-            # 3. Ajustar a aparência das planilhas
-            for sheet_name in writer.sheets:
-                worksheet = writer.sheets[sheet_name]
-                
-                # Ajustar largura das colunas
-                for idx, col in enumerate(worksheet.columns, 1):
-                    max_length = 0
-                    column = col[0].column_letter
-                    
-                    for cell in col:
-                        try:
-                            if cell.value:
-                                max_length = max(max_length, len(str(cell.value)))
-                        except:
-                            pass
-                    
-                    adjusted_width = min((max_length + 2), 50)
-                    worksheet.column_dimensions[column].width = adjusted_width
-                
-                # Congelar a primeira linha
-                worksheet.freeze_panes = worksheet.cell(row=2, column=1)
-                
-                # Formatar cabeçalhos
-                for cell in worksheet[1]:
-                    cell.style = 'Headline 3'
-        
-        print(f"\nArquivo Excel criado com sucesso: {caminho_saida}")
-        return True
-    
-    except PermissionError:
-        # Se houver erro de permissão, tenta salvar com nome alternativo
-        import datetime
-        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        diretorio, nome_arquivo = os.path.split(caminho_saida)
-        nome_base, extensao = os.path.splitext(nome_arquivo)
-        caminho_alternativo = os.path.join(diretorio, f"{nome_base}_{timestamp}{extensao}")
-        
-        print(f"\nErro de permissão ao criar arquivo. Tentando salvar como: {caminho_alternativo}")
-        
-        try:
-            with pd.ExcelWriter(caminho_alternativo, engine='openpyxl') as writer:
-                df_metricas_gerais.to_excel(writer, sheet_name='Resumo', index=False)
-                
-                for nome_planilha, df_metricas in metricas_agregadas.items():
-                    df_metricas.to_excel(writer, sheet_name=nome_planilha, index=False)
-                
+            # 0. Planilha BASE - Dados brutos processados do arquivo original
+            df_base.to_excel(writer, sheet_name='BASE', index=False)
+            
+            # 1. Planilha auxiliar: Tempo de MANOBRA por Equipamento
+            manobras_por_equipamento = df_manobras.groupby('Equipamento').agg({
+                'Duração (h)': ['count', 'sum'],
+                'RPM_Medio': 'mean',
+                'Velocidade_Media': 'mean'
+            }).round(4)
+            
+            # Renomear colunas para clareza
+            manobras_por_equipamento.columns = [
+                'Total de Manobras',
+                'Tempo Total MANOBRA (h)',
+                'RPM Médio',
+                'Velocidade Média (km/h)'
+            ]
+            
+            # Resetar índice para incluir Equipamento como coluna
+            manobras_por_equipamento = manobras_por_equipamento.reset_index()
+            
+            # Calcular tempo médio de manobra
+            manobras_por_equipamento['Tempo Médio MANOBRA (h)'] = (
+                manobras_por_equipamento['Tempo Total MANOBRA (h)'] / manobras_por_equipamento['Total de Manobras']
+            ).round(4)
+            
+            # Converter tempos para formato de hora (decimal / 24)
+            manobras_por_equipamento['Tempo Total MANOBRA (formato)'] = manobras_por_equipamento['Tempo Total MANOBRA (h)'] / 24
+            manobras_por_equipamento['Tempo Médio MANOBRA (formato)'] = manobras_por_equipamento['Tempo Médio MANOBRA (h)'] / 24
+            
+            # Reordenar colunas
+            manobras_por_equipamento = manobras_por_equipamento[[
+                'Equipamento', 'Total de Manobras', 'Tempo Total MANOBRA (h)', 'Tempo Total MANOBRA (formato)',
+                'Tempo Médio MANOBRA (h)', 'Tempo Médio MANOBRA (formato)', 'RPM Médio', 'Velocidade Média (km/h)'
+            ]]
+            
+            # Adicionar linha de totais
+            total_row = {
+                'Equipamento': 'TOTAL GERAL',
+                'Total de Manobras': manobras_por_equipamento['Total de Manobras'].sum(),
+                'Tempo Total MANOBRA (h)': manobras_por_equipamento['Tempo Total MANOBRA (h)'].sum(),
+                'Tempo Total MANOBRA (formato)': manobras_por_equipamento['Tempo Total MANOBRA (h)'].sum() / 24,
+                'Tempo Médio MANOBRA (h)': (manobras_por_equipamento['Tempo Total MANOBRA (h)'].sum() / manobras_por_equipamento['Total de Manobras'].sum()).round(4) if manobras_por_equipamento['Total de Manobras'].sum() > 0 else 0,
+                'Tempo Médio MANOBRA (formato)': ((manobras_por_equipamento['Tempo Total MANOBRA (h)'].sum() / manobras_por_equipamento['Total de Manobras'].sum()) / 24) if manobras_por_equipamento['Total de Manobras'].sum() > 0 else 0,
+                'RPM Médio': manobras_por_equipamento['RPM Médio'].mean(),
+                'Velocidade Média (km/h)': manobras_por_equipamento['Velocidade Média (km/h)'].mean()
+            }
+            manobras_por_equipamento = pd.concat([manobras_por_equipamento, pd.DataFrame([total_row])], ignore_index=True)
+            
+            # Salvar planilha
+            manobras_por_equipamento.to_excel(writer, sheet_name='Por Equipamento', index=False)
+            
+            # 2. Planilha auxiliar: Tempo de MANOBRA por Operador
+            manobras_por_operador = df_manobras.groupby('Operador').agg({
+                'Duração (h)': ['count', 'sum'],
+                'RPM_Medio': 'mean',
+                'Velocidade_Media': 'mean'
+            }).round(4)
+            
+            # Renomear colunas para clareza
+            manobras_por_operador.columns = [
+                'Total de Manobras',
+                'Tempo Total MANOBRA (h)',
+                'RPM Médio',
+                'Velocidade Média (km/h)'
+            ]
+            
+            # Resetar índice para incluir Operador como coluna
+            manobras_por_operador = manobras_por_operador.reset_index()
+            
+            # Calcular tempo médio de manobra
+            manobras_por_operador['Tempo Médio MANOBRA (h)'] = (
+                manobras_por_operador['Tempo Total MANOBRA (h)'] / manobras_por_operador['Total de Manobras']
+            ).round(4)
+            
+            # Converter tempos para formato de hora (decimal / 24)
+            manobras_por_operador['Tempo Total MANOBRA (formato)'] = manobras_por_operador['Tempo Total MANOBRA (h)'] / 24
+            manobras_por_operador['Tempo Médio MANOBRA (formato)'] = manobras_por_operador['Tempo Médio MANOBRA (h)'] / 24
+            
+            # Reordenar colunas
+            manobras_por_operador = manobras_por_operador[[
+                'Operador', 'Total de Manobras', 'Tempo Total MANOBRA (h)', 'Tempo Total MANOBRA (formato)',
+                'Tempo Médio MANOBRA (h)', 'Tempo Médio MANOBRA (formato)', 'RPM Médio', 'Velocidade Média (km/h)'
+            ]]
+            
+            # Adicionar linha de totais
+            total_row_op = {
+                'Operador': 'TOTAL GERAL',
+                'Total de Manobras': manobras_por_operador['Total de Manobras'].sum(),
+                'Tempo Total MANOBRA (h)': manobras_por_operador['Tempo Total MANOBRA (h)'].sum(),
+                'Tempo Total MANOBRA (formato)': manobras_por_operador['Tempo Total MANOBRA (h)'].sum() / 24,
+                'Tempo Médio MANOBRA (h)': (manobras_por_operador['Tempo Total MANOBRA (h)'].sum() / manobras_por_operador['Total de Manobras'].sum()).round(4) if manobras_por_operador['Total de Manobras'].sum() > 0 else 0,
+                'Tempo Médio MANOBRA (formato)': ((manobras_por_operador['Tempo Total MANOBRA (h)'].sum() / manobras_por_operador['Total de Manobras'].sum()) / 24) if manobras_por_operador['Total de Manobras'].sum() > 0 else 0,
+                'RPM Médio': manobras_por_operador['RPM Médio'].mean(),
+                'Velocidade Média (km/h)': manobras_por_operador['Velocidade Média (km/h)'].mean()
+            }
+            manobras_por_operador = pd.concat([manobras_por_operador, pd.DataFrame([total_row_op])], ignore_index=True)
+            
+            # Salvar planilha
+            manobras_por_operador.to_excel(writer, sheet_name='Por Operador', index=False)
+            
+            # 3. Planilha Turno - Análise de trocas de operadores por turno
+            df_turno = analisar_turnos(df_base)
+            if df_turno is not None and not df_turno.empty:
+                df_turno.to_excel(writer, sheet_name='Turno', index=False)
+            
+            # 4. Ajustar aparência das planilhas
                 for sheet_name in writer.sheets:
                     worksheet = writer.sheets[sheet_name]
+                
+                # Ajustar largura das colunas automaticamente
                     for idx, col in enumerate(worksheet.columns, 1):
                         max_length = 0
                         column = col[0].column_letter
@@ -707,24 +762,143 @@ def criar_excel_com_metricas_manobras(df_base, df_manobras, df_metricas_gerais, 
                             except:
                                 pass
                         
-                        adjusted_width = min((max_length + 2), 50)
+                    adjusted_width = min(max_length + 2, 50)
                         worksheet.column_dimensions[column].width = adjusted_width
                     
+                # Congelar primeira linha (cabeçalhos)
                     worksheet.freeze_panes = worksheet.cell(row=2, column=1)
                     
+                # Formatar cabeçalhos em negrito
                     for cell in worksheet[1]:
-                        cell.style = 'Headline 3'
-            
-            print(f"\nArquivo Excel criado com sucesso: {caminho_alternativo}")
+                    cell.font = openpyxl.styles.Font(bold=True)
+                
+                # Formatar colunas de tempo como formato de hora
+                if sheet_name in ['Por Equipamento', 'Por Operador']:
+                    # Encontrar colunas com "(formato)" no nome
+                    for col_idx, col_name in enumerate(worksheet[1]):
+                        if col_name.value and '(formato)' in str(col_name.value):
+                            col_letter = openpyxl.utils.get_column_letter(col_idx + 1)
+                            # Aplicar formato de hora para toda a coluna
+                            for row in range(2, worksheet.max_row + 1):
+                                cell = worksheet[f'{col_letter}{row}']
+                                cell.number_format = '[h]:mm:ss'
+                
+                # Destacar linha de totais em negrito (apenas para planilhas auxiliares)
+                if sheet_name in ['Por Equipamento', 'Por Operador']:
+                    last_row = worksheet.max_row
+                    for cell in worksheet[last_row]:
+                        cell.font = openpyxl.styles.Font(bold=True)
+                        cell.fill = openpyxl.styles.PatternFill(start_color="E6E6E6", end_color="E6E6E6", fill_type="solid")
+        
+        print(f"Arquivo Excel criado com sucesso: {caminho_saida}")
+        print(f"Planilhas criadas:")
+        print(f"- BASE: {len(df_base)} registros originais")
+        print(f"- Por Equipamento: {len(manobras_por_equipamento)-1} equipamentos")
+        print(f"- Por Operador: {len(manobras_por_operador)-1} operadores")
+        if df_turno is not None and not df_turno.empty:
+            print(f"- Turno: {len(df_turno)} trocas de operadores identificadas")
+        
         return True
         
+    except PermissionError as e:
+        print(f"ERRO: Não foi possível salvar o arquivo. Verifique se ele não está aberto: {str(e)}")
+        return False
     except Exception as e:
-            print(f"\nErro ao criar arquivo Excel alternativo: {str(e)}")
+        print(f"ERRO ao criar arquivo Excel: {str(e)}")
+        import traceback
+        traceback.print_exc()
             return False
+
+def analisar_turnos(df_base):
+    """
+    Analisa trocas de operadores na planilha BASE para identificar turnos.
+    Turno A: próximo às 7h (6:40 - 7:20)
+    Turno B: próximo às 15h (14:40 - 15:20) 
+    Turno C: próximo às 23h (22:40 - 23:20)
+    """
+    try:
+        if 'Data_Hora' not in df_base.columns or 'Operador' not in df_base.columns or 'Equipamento' not in df_base.columns:
+            print("AVISO: Colunas necessárias para análise de turnos não encontradas")
+            return None
+        
+        # Criar cópia e ordenar por equipamento e data/hora
+        df = df_base.copy()
+        df = df.sort_values(['Equipamento', 'Data_Hora'])
+        
+        # Detectar trocas de operador por equipamento
+        trocas_operador = []
+        
+        for equipamento, grupo in df.groupby('Equipamento'):
+            grupo = grupo.reset_index(drop=True)
+            
+            # Identificar onde houve troca de operador
+            for i in range(1, len(grupo)):
+                operador_anterior = grupo.loc[i-1, 'Operador']
+                operador_atual = grupo.loc[i, 'Operador']
+                
+                if operador_anterior != operador_atual:
+                    data_hora = grupo.loc[i, 'Data_Hora']
+                    hora = data_hora.hour
+                    minuto = data_hora.minute
+                    hora_decimal = hora + minuto/60
+                    
+                    # Classificar turno baseado no horário
+                    turno = classificar_turno(hora_decimal)
+                    
+                    trocas_operador.append({
+                        'Equipamento': equipamento,
+                        'Data': data_hora.date(),
+                        'Hora_Troca': data_hora.strftime('%H:%M'),
+                        'Operador_Anterior': operador_anterior,
+                        'Operador_Novo': operador_atual,
+                        'Turno': turno,
+                        'Hora_Decimal': round(hora_decimal, 2)
+                    })
+        
+        if not trocas_operador:
+            print("Nenhuma troca de operador detectada")
+            return None
+        
+        df_turnos = pd.DataFrame(trocas_operador)
+        
+        # Agrupar por turno para análise
+        resumo_turnos = df_turnos.groupby('Turno').agg({
+            'Equipamento': 'nunique',
+            'Operador_Novo': 'nunique',
+            'Data': 'nunique'
+        }).rename(columns={
+            'Equipamento': 'Equipamentos_Afetados',
+            'Operador_Novo': 'Operadores_Únicos',
+            'Data': 'Dias_Com_Trocas'
+        })
+        
+        print(f"\nResumo de trocas por turno:")
+        for turno in resumo_turnos.index:
+            print(f"- {turno}: {len(df_turnos[df_turnos['Turno'] == turno])} trocas")
+        
+        return df_turnos
     
     except Exception as e:
-        print(f"\nErro ao criar arquivo Excel: {str(e)}")
-        return False
+        print(f"ERRO ao analisar turnos: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return None
+
+def classificar_turno(hora_decimal):
+    """
+    Classifica o turno baseado no horário da troca de operador.
+    """
+    # Turno A: 6:40 às 7:20 (6.67 às 7.33)
+    if 6.67 <= hora_decimal <= 7.33:
+        return "Turno A"
+    # Turno B: 14:40 às 15:20 (14.67 às 15.33)
+    elif 14.67 <= hora_decimal <= 15.33:
+        return "Turno B"
+    # Turno C: 22:40 às 23:20 (22.67 às 23.33)
+    elif 22.67 <= hora_decimal <= 23.33:
+        return "Turno C"
+    else:
+        return "Horário Irregular"
 
 def processar_todos_arquivos():
     """
@@ -1188,90 +1362,12 @@ def calcular_metricas_manobras(df, palavras_chave_manobra=None, debug=True):
     if debug:
         print("\n=== MÉTRICAS CALCULADAS ===")
         print(f"Total de manobras: {len(df_manobras)}")
-        for tipo in df_manobras['Tipo_Equipamento'].unique():
-            if pd.notna(tipo) and tipo:  # Verificar se o tipo não é nulo ou vazio
-                df_tipo = df_manobras[df_manobras['Tipo_Equipamento'] == tipo]
-                if not df_tipo.empty:
-                    nome_planilha = f"Tipo {tipo}"[:31]  # Limitar tamanho do nome da planilha
-                    df_tipo.to_excel(writer, sheet_name=nome_planilha, index=False)
-        
-        # 4. Ajustar a aparência das planilhas
-        for sheet_name in writer.sheets:
-            worksheet = writer.sheets[sheet_name]
-            
-            # Ajustar largura das colunas
-            for idx, col in enumerate(worksheet.columns, 1):
-                max_length = 0
-                column = col[0].column_letter
-                
-                for cell in col:
-                    try:
-                        if cell.value:
-                            max_length = max(max_length, len(str(cell.value)))
-                    except:
-                        pass
-                
-                adjusted_width = (max_length + 2)
-                # Limitar largura máxima para não ficar muito grande
-                adjusted_width = min(adjusted_width, 50)
-                worksheet.column_dimensions[column].width = adjusted_width
-            
-            # Congelar a primeira linha
-            worksheet.freeze_panes = worksheet.cell(row=2, column=1)
-            
-            # Formatar cabeçalhos
-            for cell in worksheet[1]:
-                cell.style = 'Headline 3'
-    except PermissionError as e:
-        # Se ocorrer erro de permissão, tentar com um nome de arquivo alternativo
-        import datetime
-        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        diretorio, nome_arquivo = os.path.split(caminho_saida)
-        nome_base, extensao = os.path.splitext(nome_arquivo)
-        caminho_alternativo = os.path.join(diretorio, f"{nome_base}_{timestamp}{extensao}")
-        
-        print(f"Erro de permissão no arquivo original. Tentando salvar como: {caminho_alternativo}")
-        
-        with pd.ExcelWriter(caminho_alternativo, engine='openpyxl') as writer:
-            # 1. Planilha de métricas gerais (resumo)
-            df_metricas_gerais.to_excel(writer, sheet_name='Resumo', index=False)
-            
-            # 2. Planilhas com métricas agregadas por diferentes critérios
-            for nome_planilha, df_metricas in metricas_agregadas.items():
-                df_metricas.to_excel(writer, sheet_name=nome_planilha, index=False)
-            
-            # 3. Ajustar a aparência das planilhas
-            for sheet_name in writer.sheets:
-                worksheet = writer.sheets[sheet_name]
-                
-                # Ajustar largura das colunas
-                for idx, col in enumerate(worksheet.columns, 1):
-                    max_length = 0
-                    column = col[0].column_letter
-                    
-                    for cell in col:
-                        try:
-                            if cell.value:
-                                max_length = max(max_length, len(str(cell.value)))
-                        except:
-                            pass
-                    
-                    adjusted_width = (max_length + 2)
-                    # Limitar largura máxima para não ficar muito grande
-                    adjusted_width = min(adjusted_width, 50)
-                    worksheet.column_dimensions[column].width = adjusted_width
-                
-                # Congelar a primeira linha
-                worksheet.freeze_panes = worksheet.cell(row=2, column=1)
-                
-                # Formatar cabeçalhos
-                for cell in worksheet[1]:
-                    cell.style = 'Headline 3'
+        print(f"Tempo total em manobras: {df_manobras['Duração (h)'].sum():.2f} horas")
+        print(f"Tempo médio por manobra: {df_manobras['Duração (h)'].mean():.2f} horas")
+        print(f"Velocidade média: {df_manobras['Velocidade_Media'].mean():.2f} km/h")
+        print(f"RPM médio: {df_manobras['RPM_Medio'].mean():.2f}")
     
-        caminho_saida = caminho_alternativo
-    
-    print(f"Arquivo de métricas criado com sucesso: {caminho_saida}")
-    return True
+    return df_manobras, df_metricas_gerais, metricas_agregadas
 
 def listar_arquivos_para_processar():
     """
