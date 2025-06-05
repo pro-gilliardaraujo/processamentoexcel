@@ -445,12 +445,13 @@ def calcular_disponibilidade_mecanica(df):
     """
     Calcula a disponibilidade mecânica para cada equipamento e frente.
     Calcula médias diárias considerando os dias efetivos de cada equipamento.
+    Agora também inclui o percentual de uso de GPS por frota.
     
     Args:
         df (DataFrame): DataFrame processado
     
     Returns:
-        DataFrame: Disponibilidade mecânica por equipamento e frente
+        DataFrame: Disponibilidade mecânica por equipamento e frente com coluna GPS
     """
     # Filtramos os dados excluindo os operadores da lista
     df_filtrado = df[~df['Operador'].isin(OPERADORES_EXCLUIR)]
@@ -479,19 +480,30 @@ def calcular_disponibilidade_mecanica(df):
         # Calcular horas de manutenção
         manutencao = dados_grupo[dados_grupo['Grupo Operacao'] == 'Manutenção']['Diferença_Hora'].sum()
         
+        # Calcular GPS para esta frota - usar apenas dados produtivos
+        dados_produtivos = dados_grupo[dados_grupo['Grupo Operacao'] == 'Produtiva']
+        total_horas_produtivas = dados_produtivos['Diferença_Hora'].sum()
+        horas_gps = dados_produtivos['GPS'].sum()
+        
         # Se houver múltiplos dias, usar médias diárias
         if dias_grupo > 1:
             total_horas = total_horas / dias_grupo
             manutencao = manutencao / dias_grupo
+            total_horas_produtivas = total_horas_produtivas / dias_grupo
+            horas_gps = horas_gps / dias_grupo
             print(f"Equipamento: {equipamento}, Frente: {frente}, Dias efetivos: {dias_grupo}, Média diária: {total_horas:.6f} horas")
         
         # A disponibilidade mecânica é o percentual de tempo fora de manutenção
         disp_mecanica = calcular_porcentagem(total_horas - manutencao, total_horas)
         
+        # Calcular percentual de uso de GPS (GPS / tempo produtivo)
+        uso_gps = calcular_porcentagem(horas_gps, total_horas_produtivas)
+        
         resultados.append({
             'Frota': equipamento,
             'Frente': frente,
-            'Disponibilidade': disp_mecanica
+            'Disponibilidade': disp_mecanica,
+            'GPS': uso_gps
         })
     
     # Ordenar primeiro por frente, depois por disponibilidade (decrescente)
@@ -947,9 +959,9 @@ def criar_planilha_tdh(df):
     
     # Criar DataFrame vazio com as colunas necessárias
     planilha_tdh = pd.DataFrame({
-        'Frota': equipamentos_unicos['Equipamento'].values,
+        'Frota': equipamentos_unicos['Equipamento'].astype(str).values,  # Garantir que seja string
         'Frente': equipamentos_unicos['Frente'].values,
-        'TDH': [0] * len(equipamentos_unicos)  # Valores zero como placeholder
+        'TDH': [''] * len(equipamentos_unicos)  # Strings vazias em vez de zeros
     })
     
     # Ordenar primeiro por frente, depois por frota
@@ -975,9 +987,9 @@ def criar_planilha_diesel(df):
     
     # Criar DataFrame vazio com as colunas necessárias
     planilha_diesel = pd.DataFrame({
-        'Frota': equipamentos_unicos['Equipamento'].values,
+        'Frota': equipamentos_unicos['Equipamento'].astype(str).values,  # Garantir que seja string
         'Frente': equipamentos_unicos['Frente'].values,
-        'Diesel': [0] * len(equipamentos_unicos)  # Valores zero como placeholder
+        'Diesel': [''] * len(equipamentos_unicos)  # Strings vazias em vez de zeros
     })
     
     # Ordenar primeiro por frente, depois por frota
@@ -1003,9 +1015,9 @@ def criar_planilha_impureza(df):
     
     # Criar DataFrame vazio com as colunas necessárias
     planilha_impureza = pd.DataFrame({
-        'Frota': equipamentos_unicos['Equipamento'].values,
+        'Frota': equipamentos_unicos['Equipamento'].astype(str).values,  # Garantir que seja string
         'Frente': equipamentos_unicos['Frente'].values,
-        'Impureza': [0] * len(equipamentos_unicos)  # Valores zero como placeholder
+        'Impureza': [''] * len(equipamentos_unicos)  # Strings vazias em vez de zeros
     })
     
     # Ordenar primeiro por frente, depois por frota
@@ -1125,77 +1137,185 @@ def criar_excel_com_planilhas(df_base, base_calculo, disp_mecanica, eficiencia_e
             
             if sheet_name == '1_Disponibilidade Mecânica':
                 for row in range(2, worksheet.max_row + 1):
-                    cell = worksheet.cell(row=row, column=2)  # Coluna B (Disponibilidade)
-                    cell.number_format = '0.00%'
+                    # Verificar se "Frente" é a primeira coluna (reorganizada)
+                    if worksheet.cell(row=1, column=1).value == 'Frente':
+                        frota_cell = worksheet.cell(row=row, column=2)  # Coluna B (Frota)
+                        frota_cell.number_format = '@'  # Formato texto
+                        disp_cell = worksheet.cell(row=row, column=3)  # Coluna C (Disponibilidade)
+                        disp_cell.number_format = '0.00%'  # Formato percentual
+                        gps_cell = worksheet.cell(row=row, column=4)  # Coluna D (GPS)
+                        gps_cell.number_format = '0.00%'  # Formato percentual
+                    else:
+                        frota_cell = worksheet.cell(row=row, column=1)  # Coluna A (Frota)
+                        frota_cell.number_format = '@'  # Formato texto
+                        disp_cell = worksheet.cell(row=row, column=3)  # Coluna C (Disponibilidade)
+                        disp_cell.number_format = '0.00%'  # Formato percentual
+                        gps_cell = worksheet.cell(row=row, column=4)  # Coluna D (GPS)
+                        gps_cell.number_format = '0.00%'  # Formato percentual
             
             elif sheet_name == '2_Eficiência Energética':
                 for row in range(2, worksheet.max_row + 1):
-                    cell = worksheet.cell(row=row, column=2)  # Coluna B (Eficiência)
-                    cell.number_format = '0.00%'
+                    # Verificar se "Frente" é a primeira coluna (reorganizada)
+                    if worksheet.cell(row=1, column=1).value == 'Frente':
+                        operador_cell = worksheet.cell(row=row, column=2)  # Coluna B (Operador)
+                        operador_cell.number_format = '@'  # Formato texto
+                        efic_cell = worksheet.cell(row=row, column=3)  # Coluna C (Eficiência)
+                        efic_cell.number_format = '0.00%'  # Formato percentual
+                    else:
+                        operador_cell = worksheet.cell(row=row, column=1)  # Coluna A (Operador)
+                        operador_cell.number_format = '@'  # Formato texto
+                        efic_cell = worksheet.cell(row=row, column=3)  # Coluna C (Eficiência)
+                        efic_cell.number_format = '0.00%'  # Formato percentual
             
             elif sheet_name == '3_Motor Ocioso':
                 for row in range(2, worksheet.max_row + 1):
-                    cell = worksheet.cell(row=row, column=2)  # Coluna B (Porcentagem)
-                    cell.number_format = '0.00%'
-                    cell = worksheet.cell(row=row, column=3)  # Coluna C (Tempo Ligado)
-                    cell.number_format = '0.00'  # Formato decimal
-                    cell = worksheet.cell(row=row, column=4)  # Coluna D (Tempo Ocioso)
-                    cell.number_format = '0.00'  # Formato decimal
+                    # Verificar se "Frente" é a primeira coluna (reorganizada)
+                    if worksheet.cell(row=1, column=1).value == 'Frente':
+                        operador_cell = worksheet.cell(row=row, column=2)  # Coluna B (Operador)
+                        operador_cell.number_format = '@'  # Formato texto
+                        perc_cell = worksheet.cell(row=row, column=3)  # Coluna C (Porcentagem)
+                        perc_cell.number_format = '0.00%'  # Formato percentual
+                        tempo_ligado_cell = worksheet.cell(row=row, column=4)  # Coluna D (Tempo Ligado)
+                        tempo_ligado_cell.number_format = '0.00'  # Formato decimal
+                        tempo_ocioso_cell = worksheet.cell(row=row, column=5)  # Coluna E (Tempo Ocioso)
+                        tempo_ocioso_cell.number_format = '0.00'  # Formato decimal
+                    else:
+                        operador_cell = worksheet.cell(row=row, column=1)  # Coluna A (Operador)
+                        operador_cell.number_format = '@'  # Formato texto
+                        perc_cell = worksheet.cell(row=row, column=2)  # Coluna B (Porcentagem)
+                        perc_cell.number_format = '0.00%'  # Formato percentual
+                        tempo_ligado_cell = worksheet.cell(row=row, column=3)  # Coluna C (Tempo Ligado)
+                        tempo_ligado_cell.number_format = '0.00'  # Formato decimal
+                        tempo_ocioso_cell = worksheet.cell(row=row, column=4)  # Coluna D (Tempo Ocioso)
+                        tempo_ocioso_cell.number_format = '0.00'  # Formato decimal
             
             elif sheet_name == '4_Falta Apontamento':
                 for row in range(2, worksheet.max_row + 1):
-                    cell = worksheet.cell(row=row, column=2)  # Coluna B (Porcentagem)
-                    cell.number_format = '0.00%'
+                    # Verificar se "Frente" é a primeira coluna (reorganizada)
+                    if worksheet.cell(row=1, column=1).value == 'Frente':
+                        operador_cell = worksheet.cell(row=row, column=2)  # Coluna B (Operador)
+                        operador_cell.number_format = '@'  # Formato texto
+                        perc_cell = worksheet.cell(row=row, column=3)  # Coluna C (Porcentagem)
+                        perc_cell.number_format = '0.00%'  # Formato percentual
+                    else:
+                        operador_cell = worksheet.cell(row=row, column=1)  # Coluna A (Operador)
+                        operador_cell.number_format = '@'  # Formato texto
+                        perc_cell = worksheet.cell(row=row, column=3)  # Coluna C (Porcentagem)
+                        perc_cell.number_format = '0.00%'  # Formato percentual
             
             elif sheet_name == '5_Uso GPS':
                 for row in range(2, worksheet.max_row + 1):
-                    cell = worksheet.cell(row=row, column=2)  # Coluna B (Porcentagem)
-                    cell.number_format = '0.00%'
+                    # Verificar se "Frente" é a primeira coluna (reorganizada)
+                    if worksheet.cell(row=1, column=1).value == 'Frente':
+                        operador_cell = worksheet.cell(row=row, column=2)  # Coluna B (Operador)
+                        operador_cell.number_format = '@'  # Formato texto
+                        perc_cell = worksheet.cell(row=row, column=3)  # Coluna C (Porcentagem)
+                        perc_cell.number_format = '0.00%'  # Formato percentual
+                    else:
+                        operador_cell = worksheet.cell(row=row, column=1)  # Coluna A (Operador)
+                        operador_cell.number_format = '@'  # Formato texto
+                        perc_cell = worksheet.cell(row=row, column=3)  # Coluna C (Porcentagem)
+                        perc_cell.number_format = '0.00%'  # Formato percentual
             
             elif sheet_name == 'Média Velocidade':
                 for row in range(2, worksheet.max_row + 1):
-                    # Coluna B (Velocidade Geral)
-                    cell = worksheet.cell(row=row, column=2)
-                    cell.number_format = '0.00'
-                    
-                    # Coluna C (Velocidade Carregado)
-                    cell = worksheet.cell(row=row, column=3)
-                    cell.number_format = '0.00'
-                    
-                    # Coluna D (Velocidade Vazio)
-                    cell = worksheet.cell(row=row, column=4)
-                    cell.number_format = '0.00'
+                    # Verificar se "Frente" é a primeira coluna (reorganizada)
+                    if worksheet.cell(row=1, column=1).value == 'Frente':
+                        operador_cell = worksheet.cell(row=row, column=2)  # Coluna B (Operador)
+                        operador_cell.number_format = '@'  # Formato texto
+                        # Demais colunas como decimal (velocidades)
+                        for col in range(3, worksheet.max_column + 1):
+                            cell = worksheet.cell(row=row, column=col)
+                            cell.number_format = '0.00'  # Formato decimal
+                    else:
+                        operador_cell = worksheet.cell(row=row, column=1)  # Coluna A (Operador)
+                        operador_cell.number_format = '@'  # Formato texto
+                        # Demais colunas como decimal (velocidades)
+                        for col in range(2, worksheet.max_column + 1):
+                            cell = worksheet.cell(row=row, column=col)
+                            cell.number_format = '0.00'  # Formato decimal
             
             elif sheet_name == 'Horas por Frota':
                 for row in range(2, worksheet.max_row + 1):
-                    for col in range(2, worksheet.max_column + 1):  # Todas as colunas de tempo
-                        cell = worksheet.cell(row=row, column=col)
-                        cell.number_format = '0.00'  # Formato decimal
+                    # Formatar coluna Frota como texto
+                    if worksheet.cell(row=1, column=1).value == 'Frente':
+                        frota_cell = worksheet.cell(row=row, column=2)  # Coluna B (Frota)
+                        frota_cell.number_format = '@'  # Formato texto
+                        # Demais colunas como decimal (colunas de tempo)
+                        for col in range(3, worksheet.max_column + 1):
+                            cell = worksheet.cell(row=row, column=col)
+                            cell.number_format = '0.00'  # Formato decimal
+                    else:
+                        frota_cell = worksheet.cell(row=row, column=1)  # Coluna A (Frota)
+                        frota_cell.number_format = '@'  # Formato texto
+                        # Demais colunas como decimal (colunas de tempo)
+                        for col in range(2, worksheet.max_column + 1):
+                            cell = worksheet.cell(row=row, column=col)
+                            cell.number_format = '0.00'  # Formato decimal
             
             elif sheet_name == 'Ofensores':
                 for row in range(2, worksheet.max_row + 1):
-                    # Coluna C (Tempo)
-                    cell = worksheet.cell(row=row, column=3)
-                    cell.number_format = '0.00'  # Formato decimal
-                    
-                    # Coluna D (Porcentagem)
-                    cell = worksheet.cell(row=row, column=4)
-                    cell.number_format = '0.00%'  # Formato percentual
+                    # Verificar se "Frente" é a primeira coluna (reorganizada)
+                    if worksheet.cell(row=1, column=1).value == 'Frente':
+                        operador_cell = worksheet.cell(row=row, column=2)  # Coluna B (Operador)
+                        operador_cell.number_format = '@'  # Formato texto
+                        # Coluna C (Tempo)
+                        cell = worksheet.cell(row=row, column=4)  # Coluna D (Tempo)
+                        cell.number_format = '0.00'  # Formato decimal
+                        # Coluna D (Porcentagem)
+                        cell = worksheet.cell(row=row, column=5)  # Coluna E (Porcentagem)
+                        cell.number_format = '0.00%'  # Formato percentual
+                    else:
+                        operador_cell = worksheet.cell(row=row, column=1)  # Coluna A (Operador)
+                        operador_cell.number_format = '@'  # Formato texto
+                        # Coluna C (Tempo)
+                        cell = worksheet.cell(row=row, column=3)  # Coluna C (Tempo)
+                        cell.number_format = '0.00'  # Formato decimal
+                        # Coluna D (Porcentagem)
+                        cell = worksheet.cell(row=row, column=4)  # Coluna D (Porcentagem)
+                        cell.number_format = '0.00%'  # Formato percentual
                         
             elif sheet_name == 'TDH':
                 for row in range(2, worksheet.max_row + 1):
-                    cell = worksheet.cell(row=row, column=2)  # Coluna B (TDH)
-                    cell.number_format = '0.0000'  # 4 casas decimais
+                    # Frota (coluna A se "Frente" for primeira, senão coluna B) - formato texto
+                    if worksheet.cell(row=1, column=1).value == 'Frente':
+                        frota_cell = worksheet.cell(row=row, column=2)  # Coluna B (Frota)
+                        frota_cell.number_format = '@'  # Formato texto
+                        tdh_cell = worksheet.cell(row=row, column=3)  # Coluna C (TDH)
+                        tdh_cell.number_format = '0.0000'  # 4 casas decimais
+                    else:
+                        frota_cell = worksheet.cell(row=row, column=1)  # Coluna A (Frota)
+                        frota_cell.number_format = '@'  # Formato texto
+                        tdh_cell = worksheet.cell(row=row, column=3)  # Coluna C (TDH)
+                        tdh_cell.number_format = '0.0000'  # 4 casas decimais
             
             elif sheet_name == 'Diesel':
                 for row in range(2, worksheet.max_row + 1):
-                    cell = worksheet.cell(row=row, column=2)  # Coluna B (Diesel)
-                    cell.number_format = '0.0000'  # 4 casas decimais
+                    # Frota (coluna A se "Frente" for primeira, senão coluna B) - formato texto
+                    if worksheet.cell(row=1, column=1).value == 'Frente':
+                        frota_cell = worksheet.cell(row=row, column=2)  # Coluna B (Frota)
+                        frota_cell.number_format = '@'  # Formato texto
+                        diesel_cell = worksheet.cell(row=row, column=3)  # Coluna C (Diesel)
+                        diesel_cell.number_format = '0.0000'  # 4 casas decimais
+                    else:
+                        frota_cell = worksheet.cell(row=row, column=1)  # Coluna A (Frota)
+                        frota_cell.number_format = '@'  # Formato texto
+                        diesel_cell = worksheet.cell(row=row, column=3)  # Coluna C (Diesel)
+                        diesel_cell.number_format = '0.0000'  # 4 casas decimais
             
             elif sheet_name == 'Impureza Vegetal':
                 for row in range(2, worksheet.max_row + 1):
-                    cell = worksheet.cell(row=row, column=2)  # Coluna B (Impureza)
-                    cell.number_format = '0.00'  # 2 casas decimais
+                    # Frota (coluna A se "Frente" for primeira, senão coluna B) - formato texto
+                    if worksheet.cell(row=1, column=1).value == 'Frente':
+                        frota_cell = worksheet.cell(row=row, column=2)  # Coluna B (Frota)
+                        frota_cell.number_format = '@'  # Formato texto
+                        impureza_cell = worksheet.cell(row=row, column=3)  # Coluna C (Impureza)
+                        impureza_cell.number_format = '0.00'  # 2 casas decimais
+                    else:
+                        frota_cell = worksheet.cell(row=row, column=1)  # Coluna A (Frota)
+                        frota_cell.number_format = '@'  # Formato texto
+                        impureza_cell = worksheet.cell(row=row, column=3)  # Coluna C (Impureza)
+                        impureza_cell.number_format = '0.00'  # 2 casas decimais
             
             elif sheet_name == 'Base Calculo':
                 colunas_porcentagem = ['% Parado com motor ligado', '% Utilização GPS', '% Falta de Apontamento']
@@ -1206,7 +1326,10 @@ def criar_excel_com_planilhas(df_base, base_calculo, disp_mecanica, eficiencia_e
                         header = worksheet.cell(row=1, column=col).value
                         cell = worksheet.cell(row=row, column=col)
                         
-                        if header in colunas_porcentagem:
+                        # Verificar se é a coluna Frota ou Equipamento e formatá-la como texto
+                        if header in ['Frota', 'Equipamento']:
+                            cell.number_format = '@'  # Formato texto
+                        elif header in colunas_porcentagem:
                             cell.number_format = '0.00%'
                         elif header in colunas_tempo:
                             cell.number_format = '0.00'
