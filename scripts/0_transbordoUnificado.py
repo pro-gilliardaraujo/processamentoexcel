@@ -18,6 +18,7 @@ from openpyxl import Workbook
 from openpyxl.utils.dataframe import dataframe_to_rows
 from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
+import re
 
 # Configurações
 processCsv = True  # Altere para True quando quiser processar arquivos CSV
@@ -42,7 +43,7 @@ COLUNAS_DESEJADAS = [
 ]
 
 # Valores a serem filtrados
-OPERADORES_EXCLUIR = ["9999 - TROCA DE TURNO", "1 - SEM OPERADOR"]
+OPERADORES_EXCLUIR = ["9999 - TROCA DE TURNO", "1 - SEM OPERADOR", "9999 - OPERADOR TESTE"]
 
 # Adicionar função para extrair frente antes da função processar_arquivo_base()
 def extrair_frente(grupo_equipamento_frente):
@@ -1100,6 +1101,15 @@ def criar_excel_com_planilhas(df_base, base_calculo, disp_mecanica, eficiencia_e
     # Calcular ofensores
     df_ofensores = calcular_ofensores(df_base)
     
+    # Aplicar frotas aos operadores nos resultados antes de criar o Excel
+    eficiencia_energetica = adicionar_frotas_ao_operador(df_base, eficiencia_energetica)
+    motor_ocioso = adicionar_frotas_ao_operador(df_base, motor_ocioso)
+    falta_apontamento = adicionar_frotas_ao_operador(df_base, falta_apontamento)
+    uso_gps = adicionar_frotas_ao_operador(df_base, uso_gps)
+    if media_velocidade is not None and not media_velocidade.empty:
+        media_velocidade = adicionar_frotas_ao_operador(df_base, media_velocidade)
+    df_ofensores = adicionar_frotas_ao_operador(df_base, df_ofensores)
+    
     with pd.ExcelWriter(caminho_saida, engine='openpyxl') as writer:
         # Salvar cada DataFrame em uma planilha separada
         df_base.to_excel(writer, sheet_name='BASE', index=False)
@@ -1890,6 +1900,48 @@ def reordenar_colunas_frente_primeiro(df):
     # Criar lista de colunas com Frente primeiro
     colunas = ['Frente'] + [col for col in df.columns if col != 'Frente']
     return df[colunas]
+
+def adicionar_frotas_ao_operador(df_base, resultado_df, nome_coluna_operador='Operador'):
+    """
+    Adiciona as frotas (equipamentos) utilizadas ao nome do operador.
+    
+    Args:
+        df_base (DataFrame): DataFrame base com dados de Operador e Equipamento
+        resultado_df (DataFrame): DataFrame com resultados calculados
+        nome_coluna_operador (str): Nome da coluna do operador no resultado_df
+    
+    Returns:
+        DataFrame: DataFrame com operadores incluindo frotas utilizadas
+    """
+    if df_base is None or df_base.empty or resultado_df.empty:
+        return resultado_df
+    
+    # Criar mapeamento operador -> frotas
+    mapeamento_frotas = {}
+    
+    if 'Operador' in df_base.columns and 'Equipamento' in df_base.columns:
+        for operador in df_base['Operador'].unique():
+            dados_operador = df_base[df_base['Operador'] == operador]
+            # Coletar todas as frotas (equipamentos) que este operador utilizou e converter para string
+            frotas = sorted([str(eq) for eq in dados_operador['Equipamento'].unique()])
+            
+            # Montar o nome do operador com as frotas
+            if len(frotas) > 0:
+                frotas_str = ', '.join(map(str, frotas))
+                operador_com_frotas = f"{operador} ({frotas_str})"
+            else:
+                operador_com_frotas = operador
+            
+            mapeamento_frotas[operador] = operador_com_frotas
+    
+    # Aplicar mapeamento ao resultado
+    resultado_modificado = resultado_df.copy()
+    if nome_coluna_operador in resultado_modificado.columns:
+        resultado_modificado[nome_coluna_operador] = resultado_modificado[nome_coluna_operador].map(
+            lambda x: mapeamento_frotas.get(x, x)
+        )
+    
+    return resultado_modificado
 
 if __name__ == "__main__":
     print("="*80)
