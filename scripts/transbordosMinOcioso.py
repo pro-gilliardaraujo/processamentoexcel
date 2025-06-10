@@ -44,6 +44,34 @@ COLUNAS_DESEJADAS = [
 # Valores a serem filtrados
 OPERADORES_EXCLUIR = ["9999 - TROCA DE TURNO", "1 - SEM OPERADOR"]
 
+# Adicionar função para extrair frente antes da função processar_arquivo_base()
+def extrair_frente(grupo_equipamento_frente):
+    """
+    Extrai a frente da coluna 'Grupo Equipamento/Frente'.
+    
+    Args:
+        grupo_equipamento_frente (str): Valor da coluna 'Grupo Equipamento/Frente'
+    
+    Returns:
+        str: Nome da frente extraído ou 'Não informado' se não conseguir extrair
+    """
+    if pd.isna(grupo_equipamento_frente) or grupo_equipamento_frente == '':
+        return 'Não informado'
+    
+    # Tentar extrair a frente (assumindo formato "GRUPO/FRENTE" ou similar)
+    try:
+        # Se contém "/", pega a parte após a barra
+        if '/' in str(grupo_equipamento_frente):
+            return str(grupo_equipamento_frente).split('/')[-1].strip()
+        # Se contém "-", pega a parte após o traço
+        elif '-' in str(grupo_equipamento_frente):
+            return str(grupo_equipamento_frente).split('-')[-1].strip()
+        # Caso contrário, usa o valor completo
+        else:
+            return str(grupo_equipamento_frente).strip()
+    except:
+        return 'Não informado'
+
 def processar_arquivo_base(caminho_arquivo):
     """
     Processa o arquivo TXT ou CSV de transbordos e retorna o DataFrame com as transformações necessárias.
@@ -547,7 +575,7 @@ def aplicar_substituicao_operadores(df, mapeamento_substituicoes, mapeamento_hor
 def calcular_disponibilidade_mecanica(df):
     """
     Calcula a disponibilidade mecânica para cada equipamento.
-    Calcula médias diárias considerando os dias efetivos de cada equipamento.
+    Fórmula: (Total Geral - Manutenção) / Total Geral
     
     Args:
         df (DataFrame): DataFrame processado
@@ -555,9 +583,6 @@ def calcular_disponibilidade_mecanica(df):
     Returns:
         DataFrame: Disponibilidade mecânica por equipamento
     """
-    # Filtramos os dados excluindo os operadores da lista
-    df_filtrado = df[~df['Operador'].isin(OPERADORES_EXCLUIR)]
-    
     # Função para calcular valores com alta precisão e depois formatar
     def calcular_porcentagem(numerador, denominador, precisao=4):
         """Calcula porcentagem como decimal (0-1) evitando divisão por zero."""
@@ -566,28 +591,32 @@ def calcular_disponibilidade_mecanica(df):
         return 0.0
     
     # Agrupar por Equipamento e calcular horas por grupo operacional
-    equipamentos = df_filtrado['Equipamento'].unique()
+    equipamentos = df['Equipamento'].unique()
     resultados = []
     
     for equipamento in equipamentos:
-        dados_equip = df_filtrado[df_filtrado['Equipamento'] == equipamento]
+        dados_equip = df[df['Equipamento'] == equipamento]
         
-        # Determinar número de dias efetivos para este equipamento
-        dias_equip = dados_equip['Data'].nunique() if 'Data' in dados_equip.columns else 1
+        # CORREÇÃO: Usar soma total direta, não média diária
+        # Calcular Total Geral (soma de todas as diferenças de hora)
+        total_geral = dados_equip['Diferença_Hora'].sum()
         
-        total_horas = dados_equip['Diferença_Hora'].sum()
+        # Calcular horas de manutenção (Grupo Operacao = 'Manutenção')
+        horas_manutencao = dados_equip[dados_equip['Grupo Operacao'] == 'Manutenção']['Diferença_Hora'].sum()
         
-        # Calcular horas de manutenção
-        manutencao = dados_equip[dados_equip['Grupo Operacao'] == 'Manutenção']['Diferença_Hora'].sum()
+        # CORREÇÃO: Fórmula exata como no Excel: (Total Geral - Manutenção) / Total Geral
+        # A disponibilidade mecânica é: (Total - Manutenção) / Total
+        if total_geral > 0:
+            disp_mecanica = (total_geral - horas_manutencao) / total_geral
+        else:
+            disp_mecanica = 0.0
         
-        # Se houver múltiplos dias, usar médias diárias
-        if dias_equip > 1:
-            total_horas = total_horas / dias_equip
-            manutencao = manutencao / dias_equip
-            print(f"Equipamento: {equipamento}, Dias efetivos: {dias_equip}, Média diária: {total_horas:.6f} horas")
-        
-        # A disponibilidade mecânica é o percentual de tempo fora de manutenção
-        disp_mecanica = calcular_porcentagem(total_horas - manutencao, total_horas)
+        # Debug: mostrar valores para verificação
+        print(f"Equipamento: {equipamento}")
+        print(f"  Total Geral: {total_geral:.6f}")
+        print(f"  Manutenção: {horas_manutencao:.6f}")
+        print(f"  Disponibilidade: {disp_mecanica:.6f} ({disp_mecanica*100:.2f}%)")
+        print(f"  Fórmula: ({total_geral:.6f} - {horas_manutencao:.6f}) / {total_geral:.6f} = {disp_mecanica:.6f}")
         
         resultados.append({
             'Frota': equipamento,

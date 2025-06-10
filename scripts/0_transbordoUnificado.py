@@ -445,7 +445,7 @@ def aplicar_substituicao_operadores(df, mapeamento_substituicoes):
 def calcular_disponibilidade_mecanica(df):
     """
     Calcula a disponibilidade mecânica para cada equipamento e frente.
-    Calcula médias diárias considerando os dias efetivos de cada equipamento.
+    Fórmula: (Total Geral - Manutenção) / Total Geral
     Agora também inclui o percentual de uso de GPS por frota.
     
     Args:
@@ -473,32 +473,34 @@ def calcular_disponibilidade_mecanica(df):
     resultados = []
     
     for (equipamento, frente), dados_grupo in grupos:
-        # Determinar número de dias efetivos para este equipamento e frente
-        dias_grupo = dados_grupo['Data'].nunique() if 'Data' in dados_grupo.columns else 1
+        # CORREÇÃO: Usar soma total direta, não média diária
+        # Calcular Total Geral (soma de todas as diferenças de hora)
+        total_geral = dados_grupo['Diferença_Hora'].sum()
         
-        total_horas = dados_grupo['Diferença_Hora'].sum()
-        
-        # Calcular horas de manutenção
-        manutencao = dados_grupo[dados_grupo['Grupo Operacao'] == 'Manutenção']['Diferença_Hora'].sum()
+        # Calcular horas de manutenção (Grupo Operacao = 'Manutenção')
+        horas_manutencao = dados_grupo[dados_grupo['Grupo Operacao'] == 'Manutenção']['Diferença_Hora'].sum()
         
         # Calcular GPS para esta frota - usar apenas dados produtivos
         dados_produtivos = dados_grupo[dados_grupo['Grupo Operacao'] == 'Produtiva']
         total_horas_produtivas = dados_produtivos['Diferença_Hora'].sum()
         horas_gps = dados_produtivos['GPS'].sum()
         
-        # Se houver múltiplos dias, usar médias diárias
-        if dias_grupo > 1:
-            total_horas = total_horas / dias_grupo
-            manutencao = manutencao / dias_grupo
-            total_horas_produtivas = total_horas_produtivas / dias_grupo
-            horas_gps = horas_gps / dias_grupo
-            print(f"Equipamento: {equipamento}, Frente: {frente}, Dias efetivos: {dias_grupo}, Média diária: {total_horas:.6f} horas")
-        
-        # A disponibilidade mecânica é o percentual de tempo fora de manutenção
-        disp_mecanica = calcular_porcentagem(total_horas - manutencao, total_horas)
+        # CORREÇÃO: Fórmula exata como no Excel: (Total Geral - Manutenção) / Total Geral
+        # A disponibilidade mecânica é: (Total - Manutenção) / Total
+        if total_geral > 0:
+            disp_mecanica = (total_geral - horas_manutencao) / total_geral
+        else:
+            disp_mecanica = 0.0
         
         # Calcular percentual de uso de GPS (GPS / tempo produtivo)
         uso_gps = calcular_porcentagem(horas_gps, total_horas_produtivas)
+        
+        # Debug: mostrar valores para verificação
+        print(f"Equipamento: {equipamento}")
+        print(f"  Total Geral: {total_geral:.6f}")
+        print(f"  Manutenção: {horas_manutencao:.6f}")
+        print(f"  Disponibilidade: {disp_mecanica:.6f} ({disp_mecanica*100:.2f}%)")
+        print(f"  Fórmula: ({total_geral:.6f} - {horas_manutencao:.6f}) / {total_geral:.6f} = {disp_mecanica:.6f}")
         
         resultados.append({
             'Frota': equipamento,

@@ -18,6 +18,7 @@ from openpyxl import Workbook
 from openpyxl.utils.dataframe import dataframe_to_rows
 from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
+import re
 
 # Configurações
 processCsv = False  # Altere para True quando quiser processar arquivos CSV
@@ -56,6 +57,39 @@ MAPEAMENTO_BOOLEANO = {
     True: 1, False: 0,
     1: 1, 0: 0
 }
+
+def extrair_frente(grupo_equipamento_frente):
+    """
+    Extrai o número da frente do campo "Grupo Equipamento/Frente".
+    Assume que a frente é a última palavra/número na string.
+    
+    Args:
+        grupo_equipamento_frente (str): Valor do campo "Grupo Equipamento/Frente"
+    
+    Returns:
+        str: Número da frente extraído, ou string vazia se não encontrado
+    """
+    if pd.isna(grupo_equipamento_frente) or not grupo_equipamento_frente:
+        return ""
+    
+    # Converter para string e dividir por espaços
+    partes = str(grupo_equipamento_frente).strip().split()
+    
+    if not partes:
+        return ""
+    
+    # Pegar a última palavra
+    ultima_palavra = partes[-1]
+    
+    # Verificar se é um número ou contém número
+    numeros = re.findall(r'\d+', ultima_palavra)
+    
+    if numeros:
+        # Retornar o último número encontrado na última palavra
+        return numeros[-1]
+    
+    # Se não encontrou número, retornar a última palavra mesmo assim
+    return ultima_palavra
 
 def carregar_config_calculos():
     """
@@ -443,12 +477,19 @@ def calcular_base_calculo(df):
             '% Parado com motor ligado': percent_parado_motor
         })
     
-    return pd.DataFrame(resultados)
+    # Criar DataFrame com os resultados
+    base_calculo = pd.DataFrame(resultados)
+    
+    # Adicionar coluna Frente extraída
+    if not base_calculo.empty:
+        base_calculo['Frente'] = base_calculo['Grupo Equipamento/Frente'].apply(extrair_frente)
+    
+    return base_calculo
 
 def calcular_disponibilidade_mecanica(df):
     """
     Calcula a disponibilidade mecânica para cada equipamento.
-    Calcula médias diárias considerando os dias efetivos de cada equipamento.
+    Fórmula: (Total Geral - Manutenção) / Total Geral
     
     Args:
         df (DataFrame): DataFrame processado
@@ -473,22 +514,26 @@ def calcular_disponibilidade_mecanica(df):
     for equipamento in equipamentos:
         dados_equip = df_filtrado[df_filtrado['Equipamento'] == equipamento]
         
-        # Determinar número de dias efetivos para este equipamento
-        dias_equip = dados_equip['Data'].nunique() if 'Data' in dados_equip.columns else 1
+        # CORREÇÃO: Usar soma total direta, não média diária
+        # Calcular Total Geral (soma de todas as diferenças de hora)
+        total_geral = dados_equip['Diferença_Hora'].sum()
         
-        total_horas = round(dados_equip['Diferença_Hora'].sum(), 4)
+        # Calcular horas de manutenção (Grupo Operacao = 'Manutenção')
+        horas_manutencao = dados_equip[dados_equip['Grupo Operacao'] == 'Manutenção']['Diferença_Hora'].sum()
         
-        # Calcular horas de manutenção
-        manutencao = round(dados_equip[dados_equip['Grupo Operacao'] == 'Manutenção']['Diferença_Hora'].sum(), 4)
+        # CORREÇÃO: Fórmula exata como no Excel: (Total Geral - Manutenção) / Total Geral
+        # A disponibilidade mecânica é: (Total - Manutenção) / Total
+        if total_geral > 0:
+            disp_mecanica = (total_geral - horas_manutencao) / total_geral
+        else:
+            disp_mecanica = 0.0
         
-        # Se houver múltiplos dias, usar médias diárias
-        if dias_equip > 1:
-            total_horas = round(total_horas / dias_equip, 4)
-            manutencao = round(manutencao / dias_equip, 4)
-            print(f"Equipamento: {equipamento}, Dias efetivos: {dias_equip}, Média diária: {total_horas:.2f} horas")
-        
-        # A disponibilidade mecânica é o percentual de tempo fora de manutenção
-        disp_mecanica = calcular_porcentagem(total_horas - manutencao, total_horas)
+        # Debug: mostrar valores para verificação
+        print(f"Equipamento: {equipamento}")
+        print(f"  Total Geral: {total_geral:.6f}")
+        print(f"  Manutenção: {horas_manutencao:.6f}")
+        print(f"  Disponibilidade: {disp_mecanica:.6f} ({disp_mecanica*100:.2f}%)")
+        print(f"  Fórmula: ({total_geral:.6f} - {horas_manutencao:.6f}) / {total_geral:.6f} = {disp_mecanica:.6f}")
         
         resultados.append({
             'Frota': equipamento,
