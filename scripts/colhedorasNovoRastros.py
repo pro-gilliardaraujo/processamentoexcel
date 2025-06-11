@@ -1055,12 +1055,14 @@ def calcular_ofensores(df):
 def criar_planilha_coordenadas(df_base):
     """
     Cria uma planilha com coordenadas das frotas, ordenada por hora e por frota.
+    IMPORTANTE: Esta função inclui TODOS os pontos GPS, inclusive de operadores 
+    que podem ser filtrados em outras análises.
     
     Args:
-        df_base (DataFrame): DataFrame com os dados base
+        df_base (DataFrame): DataFrame com os dados base COMPLETOS
         
     Returns:
-        DataFrame: DataFrame com as colunas Frota, Hora, Latitude e Longitude
+        DataFrame: DataFrame com as colunas Equipamento, Hora, Latitude e Longitude
     """
     # Verificar se as colunas necessárias existem
     colunas_necessarias = ['Equipamento', 'Hora', 'Latitude', 'Longitude']
@@ -1068,29 +1070,40 @@ def criar_planilha_coordenadas(df_base):
         if coluna not in df_base.columns:
             print(f"Aviso: Coluna '{coluna}' não encontrada para criar planilha de coordenadas.")
             # Criar um DataFrame vazio com as colunas necessárias
-            return pd.DataFrame(columns=['Frota', 'Hora', 'Latitude', 'Longitude'])
+            return pd.DataFrame(columns=['Equipamento', 'Hora', 'Latitude', 'Longitude'])
     
     # Criar um novo DataFrame apenas com as colunas necessárias
+    # IMPORTANTE: Usar df_base completo, SEM filtrar operadores
     df_coordenadas = df_base[colunas_necessarias].copy()
     
-    # Renomear a coluna Equipamento para Frota
-    df_coordenadas.rename(columns={'Equipamento': 'Frota'}, inplace=True)
+    print(f"Coordenadas ANTES do filtro: {len(df_coordenadas)} registros")
     
     # Garantir que a coluna Hora esteja no formato correto (hh:mm:ss)
     if df_coordenadas['Hora'].dtype == 'datetime64[ns]':
         df_coordenadas['Hora'] = df_coordenadas['Hora'].dt.strftime('%H:%M:%S')
     
-    # Ordenar por Frota (como texto) e por Hora
-    df_coordenadas['Frota'] = df_coordenadas['Frota'].astype(str)
+    # Ordenar por Equipamento (como texto) e por Hora
+    df_coordenadas['Equipamento'] = df_coordenadas['Equipamento'].astype(str)
     
     # Certificar que podemos ordenar por hora (convertendo temporariamente)
     df_coordenadas['Hora_temp'] = pd.to_datetime(df_coordenadas['Hora'], format='%H:%M:%S', errors='coerce')
-    df_coordenadas = df_coordenadas.sort_values(['Frota', 'Hora_temp'])
+    df_coordenadas = df_coordenadas.sort_values(['Equipamento', 'Hora_temp'])
     df_coordenadas.drop('Hora_temp', axis=1, inplace=True)
     
     # Garantir que as coordenadas sejam numéricas
     df_coordenadas['Latitude'] = pd.to_numeric(df_coordenadas['Latitude'], errors='coerce')
     df_coordenadas['Longitude'] = pd.to_numeric(df_coordenadas['Longitude'], errors='coerce')
+    
+    # Filtrar apenas coordenadas válidas (não zero e não nulas)
+    # MANTER este filtro pois coordenadas 0,0 são dados inválidos
+    df_coordenadas = df_coordenadas[
+        (df_coordenadas['Latitude'] != 0) & 
+        (df_coordenadas['Longitude'] != 0) &
+        (df_coordenadas['Latitude'].notna()) &
+        (df_coordenadas['Longitude'].notna())
+    ]
+    
+    print(f"Coordenadas APÓS filtro de GPS válidos: {len(df_coordenadas)} registros")
     
     # Formatar as coordenadas como strings com ponto decimal
     df_coordenadas['Latitude'] = df_coordenadas['Latitude'].apply(lambda x: f"{x:.9f}" if pd.notnull(x) else '')
@@ -1098,6 +1111,8 @@ def criar_planilha_coordenadas(df_base):
     
     # Remover duplicatas completas para reduzir tamanho da planilha
     df_coordenadas = df_coordenadas.drop_duplicates()
+    
+    print(f"Coordenadas FINAIS (sem duplicatas): {len(df_coordenadas)} registros")
     
     return df_coordenadas
 
