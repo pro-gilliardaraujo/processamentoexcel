@@ -32,22 +32,22 @@ CONFIGURACOES = {
     'TAMANHO_MINIMO_TRAJETO': 3,          # Mínimo de pontos para formar um trajeto válido (menor)
     
     # Filtros de qualidade dos dados GPS - mais restritivos
-    'DISTANCIA_MAXIMA_LIGACAO': 120,      # Voltar a distância menor para evitar linhas atravessadas
-    'FILTRO_OUTLIERS_IQR': 3,           # Voltar ao padrão
-    'USAR_FILTRO_DIRECAO': True,         # Manter desabilitado
-    'MUDANCA_DIRECAO_MAXIMA': 120,        # Mais restritivo
+    'DISTANCIA_MAXIMA_LIGACAO': 175,      # Voltar a distância menor para evitar linhas atravessadas
+    'FILTRO_OUTLIERS_IQR': 10,           # Voltar ao padrão
+    'USAR_FILTRO_DIRECAO': False,         # Manter desabilitado
+    'MUDANCA_DIRECAO_MAXIMA': 60,        # Mais restritivo
     'PONTOS_MINIMOS_CALCULO_DIRECAO': 4,  # Manter
     
     # Suavização das linhas - MUITO reduzida
     'SUAVIZAR_LINHAS': True,              # Manter habilitado
-    'FATOR_SUAVIZACAO': 1.0,              # Muito menos suave (era 5)
+    'FATOR_SUAVIZACAO': 0.0,              # Muito menos suave (era 5)
     'TIPO_SUAVIZACAO': 'linear',          # Mudar para linear (mais realista)
     'SIGMA_GAUSSIANO': 0.0,               # Reduzir drasticamente (era 2.0)
     
     # Aparência das linhas e pontos
-    'ESPESSURA_LINHA': 2,                 # Reduzir espessura
-    'TAMANHO_PONTOS_GPS': 4,              # Pontos menores
-    'TRANSPARENCIA_LINHA': 0.8,           # Mais transparente
+    'ESPESSURA_LINHA': 1,                 # Reduzir espessura
+    'TAMANHO_PONTOS_GPS': 2,              # Pontos menores
+    'TRANSPARENCIA_LINHA': 1.0,           # Mais transparente
     'TRANSPARENCIA_PONTOS': 0.3,          # Mais transparente
     
     # Configurações do mapa de fundo
@@ -564,7 +564,7 @@ def gerar_mapa_rastros(df_coords, caminho_saida, nome_arquivo):
             from matplotlib.lines import Line2D
             elementos_legenda.append(Line2D([0], [0], marker='o', color='w', 
                                           markerfacecolor=cor, markersize=8, 
-                                          label=f'Equip. {equipamento}'))
+                                          label=f'{equipamento}'))
         
         # Adicionar legenda com bolinhas
         if CONFIGURACOES['MOSTRAR_LEGENDA'] and elementos_legenda:
