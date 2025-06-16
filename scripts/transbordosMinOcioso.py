@@ -795,15 +795,23 @@ def calcular_falta_apontamento(base_calculo):
     # Agrupar por operador e calcular a média
     agrupado = df_temp.groupby('Operador')['% Falta de Apontamento'].mean().reset_index()
     
-    # Renomear a coluna para o formato esperado no relatório
+    # Garantir coluna 'Porcentagem'
     agrupado.rename(columns={'% Falta de Apontamento': 'Porcentagem'}, inplace=True)
     
-    print("\n=== DETALHAMENTO DE FALTA DE APONTAMENTO (EXTRAÍDO DA BASE CALCULO) ===")
+    # Adicionar sufixo de frotas
+    resultados = []
     for _, row in agrupado.iterrows():
+        op = row['Operador']
+        frotas = sorted(base_calculo[base_calculo['Operador'] == op]['Equipamento'].astype(str).unique())
+        op_nome = f"{op} ({', '.join(frotas)})" if frotas else op
+        resultados.append({'Operador': op_nome, 'Porcentagem': row['Porcentagem']})
+
+    resultado_df = pd.DataFrame(resultados)
+    print("\n=== DETALHAMENTO DE FALTA DE APONTAMENTO (EXTRAÍDO DA BASE CALCULO) ===")
+    for _, row in resultado_df.iterrows():
         print(f"Operador: {row['Operador']}, Porcentagem: {row['Porcentagem']:.6f}")
     print("-" * 60)
-    
-    return agrupado
+    return resultado_df
 
 def calcular_uso_gps(base_calculo):
     """
@@ -822,15 +830,23 @@ def calcular_uso_gps(base_calculo):
     # Agrupar por operador e calcular a média ponderada
     agrupado = df_temp.groupby('Operador')['% Utilização GPS'].mean().reset_index()
     
-    # Renomear a coluna para o formato esperado no relatório
+    # Garantir coluna 'Porcentagem'
     agrupado.rename(columns={'% Utilização GPS': 'Porcentagem'}, inplace=True)
     
-    print("\n=== DETALHAMENTO DE UTILIZAÇÃO DE GPS (EXTRAÍDO DA BASE CALCULO) ===")
+    # Adicionar sufixo de frotas
+    resultados = []
     for _, row in agrupado.iterrows():
+        op = row['Operador']
+        frotas = sorted(base_calculo[base_calculo['Operador'] == op]['Equipamento'].astype(str).unique())
+        op_nome = f"{op} ({', '.join(frotas)})" if frotas else op
+        resultados.append({'Operador': op_nome, 'Porcentagem': row['Porcentagem']})
+
+    resultado_df = pd.DataFrame(resultados)
+    print("\n=== DETALHAMENTO DE UTILIZAÇÃO DE GPS (EXTRAÍDO DA BASE CALCULO) ===")
+    for _, row in resultado_df.iterrows():
         print(f"Operador: {row['Operador']}, Porcentagem: {row['Porcentagem']:.6f}")
     print("-" * 60)
-    
-    return agrupado
+    return resultado_df
 
 def calcular_media_velocidade(df):
     """
@@ -984,6 +1000,12 @@ def calcular_media_velocidade(df):
     
     # Ordenar por operador
     resultado = resultado.sort_values('Operador')
+    
+    # Adicionar sufixo de frotas ao nome do operador
+    def _op_frotas_mv(op):
+        frotas = sorted(df[df['Operador'] == op]['Equipamento'].astype(str).unique())
+        return f"{op} ({', '.join(frotas)})" if frotas else op
+    resultado['Operador'] = resultado['Operador'].apply(_op_frotas_mv)
     
     # DIAGNÓSTICO: Verificar resultado final
     print(f"\nVelocidades calculadas para {len(resultado)} operadores.")
