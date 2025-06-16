@@ -716,8 +716,14 @@ def calcular_eficiencia_energetica(base_calculo):
         axis=1
     )
     
-    # Retornar apenas as colunas necessárias
-    return agrupado[['Operador', 'Eficiência']]
+    resultados = []
+    for _, row in agrupado.iterrows():
+        operador = row['Operador']
+        frotas = sorted(base_calculo[base_calculo['Operador'] == operador]['Equipamento'].astype(str).unique())
+        operador_nome = f"{operador} ({', '.join(frotas)})" if frotas else operador
+        resultados.append({'Operador': operador_nome, 'Eficiência': row['Eficiência']})
+    
+    return pd.DataFrame(resultados)
 
 def calcular_motor_ocioso(base_calculo, df_base=None):
     """
@@ -748,8 +754,19 @@ def calcular_motor_ocioso(base_calculo, df_base=None):
         'Motor Ligado': 'Tempo Ligado'
     }, inplace=True)
     
-    # Colunas de saída no formato esperado
-    resultado = agrupado[['Operador', 'Porcentagem', 'Tempo Ligado', 'Tempo Ocioso']]
+    resultado = []
+    for _, row in agrupado.iterrows():
+        operador = row['Operador']
+        frotas = sorted(base_calculo[base_calculo['Operador'] == operador]['Equipamento'].astype(str).unique())
+        operador_nome = f"{operador} ({', '.join(frotas)})" if frotas else operador
+        resultado.append({
+            'Operador': operador_nome,
+            'Porcentagem': row['Porcentagem'],
+            'Tempo Ligado': row['Tempo Ligado'],
+            'Tempo Ocioso': row['Tempo Ocioso']
+        })
+    
+    resultado = pd.DataFrame(resultado)
     
     print("\n=== DETALHAMENTO DO MOTOR OCIOSO (EXTRAÍDO DA BASE CALCULO) ===")
     for _, row in resultado.iterrows():
@@ -1186,6 +1203,45 @@ def criar_excel_com_planilhas(df_base, base_calculo, disp_mecanica, eficiencia_e
     # Calcular ofensores
     df_ofensores = calcular_ofensores(df_base)
     
+    # ===== CÁLCULO DE MANOBRAS (média simples) =====
+    if {'Estado', 'Diferença_Hora'}.issubset(df_base.columns):
+        df_manobras = df_base[df_base['Estado'] == 'MANOBRA']
+    else:
+        df_manobras = pd.DataFrame()
+
+    if not df_manobras.empty:
+        # Média por Operador
+        if 'Operador' in df_manobras.columns:
+            df_manobras_operador = (
+                df_manobras.groupby('Operador')['Diferença_Hora']
+                .mean()
+                .reset_index()
+                .rename(columns={'Diferença_Hora': 'Tempo Médio Manobras'})
+                .sort_values('Tempo Médio Manobras', ascending=False)
+            )
+            def _op_frotas(op):
+                frotas = sorted(df_manobras[df_manobras['Operador'] == op]['Equipamento'].astype(str).unique())
+                return f"{op} ({', '.join(frotas)})" if frotas else op
+            df_manobras_operador['Operador'] = df_manobras_operador['Operador'].apply(_op_frotas)
+        else:
+            df_manobras_operador = pd.DataFrame(columns=['Operador', 'Tempo Médio Manobras'])
+
+        # Média por Frota
+        if 'Equipamento' in df_manobras.columns:
+            df_manobras_frota = (
+                df_manobras.groupby('Equipamento')['Diferença_Hora']
+                .mean()
+                .reset_index()
+                .rename(columns={'Equipamento': 'Frota', 'Diferença_Hora': 'Tempo Médio Manobras'})
+                .sort_values('Tempo Médio Manobras', ascending=False)
+            )
+        else:
+            df_manobras_frota = pd.DataFrame(columns=['Frota', 'Tempo Médio Manobras'])
+    else:
+        df_manobras_operador = pd.DataFrame(columns=['Operador', 'Tempo Médio Manobras'])
+        df_manobras_frota   = pd.DataFrame(columns=['Frota', 'Tempo Médio Manobras'])
+    # ===== FIM CÁLCULO DE MANOBRAS =====
+    
     with pd.ExcelWriter(caminho_saida, engine='openpyxl') as writer:
         # Salvar cada DataFrame em uma planilha separada
         df_base.to_excel(writer, sheet_name='BASE', index=False)
@@ -1204,6 +1260,10 @@ def criar_excel_com_planilhas(df_base, base_calculo, disp_mecanica, eficiencia_e
         df_tdh.to_excel(writer, sheet_name='TDH', index=False)
         df_diesel.to_excel(writer, sheet_name='Diesel', index=False)
         df_impureza.to_excel(writer, sheet_name='Impureza Vegetal', index=False)
+        
+        # Adicionar planilhas de Manobras
+        df_manobras_operador.to_excel(writer, sheet_name='Manobras Operador', index=False)
+        df_manobras_frota.to_excel(writer, sheet_name='Manobras Frotas', index=False)
         
         if media_velocidade is None:
             media_velocidade = pd.DataFrame(columns=['Operador', 'Velocidade Geral', 'Velocidade Carregado', 'Velocidade Vazio'])
@@ -1294,6 +1354,17 @@ def criar_excel_com_planilhas(df_base, base_calculo, disp_mecanica, eficiencia_e
                 for row in range(2, worksheet.max_row + 1):
                     cell = worksheet.cell(row=row, column=2)  # Coluna B (Impureza)
                     cell.number_format = '0.00'  # 2 casas decimais
+            
+            elif sheet_name in ['Manobras Operador', 'Manobras Frotas']:
+                # Cabeçalho da coluna C
+                worksheet.cell(row=1, column=3).value = 'Tempo Médio (hh:mm)'
+                for row in range(2, worksheet.max_row + 1):
+                    dec_cell = worksheet.cell(row=row, column=2)  # decimal
+                    dec_cell.number_format = '0.0000'
+                    time_cell = worksheet.cell(row=row, column=3)
+                    time_cell.value = f"=B{row}/24"
+                    time_cell.number_format = 'h:mm:ss'
+                ajustar_largura_colunas(worksheet)
             
             elif sheet_name == 'Base Calculo':
                 colunas_porcentagem = ['% Parado com motor ligado', '% Utilização GPS', '% Falta de Apontamento']
