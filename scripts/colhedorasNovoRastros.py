@@ -13,7 +13,7 @@ import tempfile
 import shutil
 import json
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timedelta
 from openpyxl import Workbook
 from openpyxl.utils.dataframe import dataframe_to_rows
 from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
@@ -22,6 +22,10 @@ import re
 
 # Configurações
 processCsv = False  # Altere para True quando quiser processar arquivos CSV
+
+# Configurações de manobras
+tempoMinimoManobras = 15  # Tempo mínimo para considerar uma manobra válida (em segundos)
+velocidadeMinimaManobras = 0  # Velocidade mínima para considerar uma manobra válida (em km/h)
 
 # Constantes
 COLUNAS_REMOVER = [
@@ -1170,41 +1174,108 @@ def criar_excel_com_planilhas(df_base, base_calculo, disp_mecanica, eficiencia_e
 
     # ===== CÁLCULO DE MANOBRAS (média simples) =====
     if {'Estado', 'Diferença_Hora'}.issubset(df_base.columns):
-        df_manobras = df_base[df_base['Estado'] == 'MANOBRA']
+        # Filtrar manobras pelo tempo mínimo configurado (converter de segundos para horas)
+        tempo_minimo_horas = tempoMinimoManobras / 3600
+        df_manobras = df_base[(df_base['Estado'] == 'MANOBRA') & 
+                             (df_base['Diferença_Hora'] >= tempo_minimo_horas) & 
+                             (df_base['Velocidade'] >= velocidadeMinimaManobras)]
+        
+        # Mostrar informações sobre o filtro aplicado
+        total_manobras_original = len(df_base[df_base['Estado'] == 'MANOBRA'])
+        total_manobras_filtradas = len(df_manobras)
+        print(f"\nFiltros de manobras aplicados:")
+        print(f"- Tempo mínimo: {tempoMinimoManobras} segundos ({tempo_minimo_horas:.6f} horas)")
+        print(f"- Velocidade mínima: {velocidadeMinimaManobras} km/h")
+        print(f"Total de manobras antes dos filtros: {total_manobras_original}")
+        print(f"Total de manobras após os filtros: {total_manobras_filtradas}")
+        print(f"Manobras removidas: {total_manobras_original - total_manobras_filtradas} ({((total_manobras_original - total_manobras_filtradas) / total_manobras_original * 100) if total_manobras_original > 0 else 0:.2f}%)\n")
     else:
         df_manobras = pd.DataFrame()
 
     if not df_manobras.empty:
         # Operador
         if 'Operador' in df_manobras.columns:
-            df_manobras_operador = (
-                df_manobras.groupby('Operador')['Diferença_Hora']
-                .mean()
-                .reset_index()
-                .rename(columns={'Diferença_Hora': 'Tempo Médio Manobras'})
-                .sort_values('Tempo Médio Manobras', ascending=False)
-            )
+            # Calcular métricas por operador
+            df_manobras_operador = df_manobras.groupby('Operador').agg({
+                'Diferença_Hora': ['count', 'mean', 'sum'],
+                'RPM Motor': 'mean',
+                'Velocidade': 'mean'
+            }).reset_index()
+            
+            # Renomear colunas
+            df_manobras_operador.columns = [
+                'Operador', 
+                'Quantidade Manobras', 
+                'Tempo Médio Manobras', 
+                'Tempo Total Manobras',
+                'RPM Médio', 
+                'Velocidade Média'
+            ]
+            
+            # Ordenar por tempo médio
+            df_manobras_operador = df_manobras_operador.sort_values('Tempo Médio Manobras', ascending=False)
+            
             # Adicionar sufixo de frotas ao nome do operador
             def operador_com_frotas(op):
                 frotas = sorted(df_manobras[df_manobras['Operador'] == op]['Equipamento'].astype(str).unique())
                 return f"{op} ({', '.join(frotas)})" if frotas else op
             df_manobras_operador['Operador'] = df_manobras_operador['Operador'].apply(operador_com_frotas)
         else:
-            df_manobras_operador = pd.DataFrame(columns=['Operador', 'Tempo Médio Manobras'])
+            df_manobras_operador = pd.DataFrame(columns=[
+                'Operador', 
+                'Quantidade Manobras', 
+                'Tempo Médio Manobras', 
+                'Tempo Total Manobras',
+                'RPM Médio', 
+                'Velocidade Média'
+            ])
         # Frota
         if 'Equipamento' in df_manobras.columns:
-            df_manobras_frota = (
-                df_manobras.groupby('Equipamento')['Diferença_Hora']
-                .mean()
-                .reset_index()
-                .rename(columns={'Equipamento': 'Frota', 'Diferença_Hora': 'Tempo Médio Manobras'})
-                .sort_values('Tempo Médio Manobras', ascending=False)
-            )
+            # Calcular métricas por frota
+            df_manobras_frota = df_manobras.groupby('Equipamento').agg({
+                'Diferença_Hora': ['count', 'mean', 'sum'],
+                'RPM Motor': 'mean',
+                'Velocidade': 'mean'
+            }).reset_index()
+            
+            # Renomear colunas
+            df_manobras_frota.columns = [
+                'Frota', 
+                'Quantidade Manobras', 
+                'Tempo Médio Manobras', 
+                'Tempo Total Manobras',
+                'RPM Médio', 
+                'Velocidade Média'
+            ]
+            
+            # Ordenar por tempo médio
+            df_manobras_frota = df_manobras_frota.sort_values('Tempo Médio Manobras', ascending=False)
         else:
-            df_manobras_frota = pd.DataFrame(columns=['Frota', 'Tempo Médio Manobras'])
+            df_manobras_frota = pd.DataFrame(columns=[
+                'Frota', 
+                'Quantidade Manobras', 
+                'Tempo Médio Manobras', 
+                'Tempo Total Manobras',
+                'RPM Médio', 
+                'Velocidade Média'
+            ])
     else:
-        df_manobras_operador = pd.DataFrame(columns=['Operador', 'Tempo Médio Manobras'])
-        df_manobras_frota   = pd.DataFrame(columns=['Frota', 'Tempo Médio Manobras'])
+        df_manobras_operador = pd.DataFrame(columns=[
+            'Operador', 
+            'Quantidade Manobras', 
+            'Tempo Médio Manobras', 
+            'Tempo Total Manobras',
+            'RPM Médio', 
+            'Velocidade Média'
+        ])
+        df_manobras_frota = pd.DataFrame(columns=[
+            'Frota', 
+            'Quantidade Manobras', 
+            'Tempo Médio Manobras', 
+            'Tempo Total Manobras',
+            'RPM Médio', 
+            'Velocidade Média'
+        ])
     # ===== FIM CÁLCULO DE MANOBRAS =====
     
     with pd.ExcelWriter(caminho_saida, engine='openpyxl') as writer:
@@ -1386,15 +1457,42 @@ def criar_excel_com_planilhas(df_base, base_calculo, disp_mecanica, eficiencia_e
                             cell.number_format = '0.00'
 
             elif sheet_name in ['Manobras Operador', 'Manobras Frotas']:
-                # Cabeçalho da nova coluna
-                worksheet.cell(row=1, column=3).value = 'Tempo Médio (hh:mm)'
-                # Inserir fórmula =B?/24 e formatar
+                # Cabeçalho da nova coluna para formato de hora
+                worksheet.cell(row=1, column=worksheet.max_column + 1).value = 'Tempo Médio (hh:mm)'
+                worksheet.cell(row=1, column=worksheet.max_column).value = 'Tempo Total (hh:mm)'
+                
+                # Formatar colunas numéricas
                 for row in range(2, worksheet.max_row + 1):
-                    dec_cell = worksheet.cell(row=row, column=2)
+                    # Quantidade de Manobras (coluna 2)
+                    cell = worksheet.cell(row=row, column=2)
+                    cell.number_format = '0'
+                    
+                    # Tempo Médio (coluna 3)
+                    dec_cell = worksheet.cell(row=row, column=3)
                     dec_cell.number_format = '0.0000'
-                    time_cell = worksheet.cell(row=row, column=3)
-                    time_cell.value = f"=B{row}/24"
-                    time_cell.number_format = 'h:mm:ss'
+                    
+                    # Tempo Total (coluna 4)
+                    total_cell = worksheet.cell(row=row, column=4)
+                    total_cell.number_format = '0.0000'
+                    
+                    # RPM Médio (coluna 5)
+                    rpm_cell = worksheet.cell(row=row, column=5)
+                    rpm_cell.number_format = '0'
+                    
+                    # Velocidade Média (coluna 6) - Sem formatação específica
+                    vel_cell = worksheet.cell(row=row, column=6)
+                    vel_cell.number_format = 'General'
+                    
+                    # Adicionar colunas com tempo formatado como horas
+                    # Tempo Médio (hh:mm)
+                    worksheet.cell(row=row, column=worksheet.max_column).value = dec_cell.value / 24 if dec_cell.value else 0
+                    worksheet.cell(row=row, column=worksheet.max_column).number_format = 'h:mm:ss'
+                    
+                    # Tempo Total (hh:mm)
+                    worksheet.cell(row=row, column=worksheet.max_column - 1).value = total_cell.value / 24 if total_cell.value else 0
+                    worksheet.cell(row=row, column=worksheet.max_column - 1).number_format = 'h:mm:ss'
+                
+                # Reajustar largura das colunas
                 ajustar_largura_colunas(worksheet)
     
     # ===== INÍCIO: cálculo de manobras =====
