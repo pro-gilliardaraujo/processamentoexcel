@@ -18,7 +18,7 @@ import colorsys
 
 CONFIG = {
     # Zoom inicial do mapa
-    'zoom_start': 16,
+    'zoom_start': 25,
     # Tile base (folium aceita 'OpenStreetMap', 'Stamen Terrain', etc.)
     'base_tile': 'OpenStreetMap',
     # Adicionar camada Satélite (True/False)
@@ -61,6 +61,32 @@ CONFIG = {
         'espaco_itens': 12,                # Espaço vertical entre itens
         'espaco_horizontal': 16,           # Espaço entre círculo e texto
         'negrito': True                    # Texto em negrito
+    },
+
+    # --------------------------------------------------------------
+    # FILTRO DE ÁREA DE TRABALHO
+    # Ajuste estes parâmetros para decidir o que é considerado
+    # "concentração de trabalho" (vs. deslocamento linear)
+    # --------------------------------------------------------------
+    'filtro_trabalho': {
+        'ativar': True,          # Desabilite para manter comportamento anterior
+        'eps_metros': 200,       # Raio p/ clustering DBSCAN (mesmo que solicitado)
+        'min_samples': 5,        # Pontos mínimos em um cluster
+        'min_total_pontos': 25,  # Pontos mínimos de um cluster p/ ser mantido
+        # Se largura vs altura do cluster for muito estreito (< razão),
+        # é considerado linear (deslocamento) e descartado.
+        'linear_ratio_max': 0.25
+    },
+
+    # Se True, ajusta automaticamente o zoom/centro para caber todos os pontos
+    # usando fit_bounds. Se False, respeita o zoom_start fornecido.
+    'usar_fit_bounds': True,
+    # Ajustes do fit_bounds quando ativado
+    'fit_bounds': {
+        # Porcentagem extra de margem (0.08 = 8%)
+        'margin_percent': 0.05,
+        # Margem mínima em graus para evitar zoom exagerado (≈ 0.0008 ≈ 90 m)
+        'margin_min_deg': 0.0005
     },
 }
 
@@ -1790,49 +1816,66 @@ def main():
             print(f"⚠️  Dados vazios em {os.path.basename(arquivo)}, pulando.")
             continue
 
-        mapa = criar_mapa_simples(dados)
-        if mapa:
+        # Divide em grupos geográficos se houver regiões distantes
+        grupos = separar_por_distancia(dados, dist_metros=4000)
+        print(f"→ {len(grupos)} grupo(s) geográficos detectados para {os.path.basename(arquivo)}")
+
+        for idx_grupo, dados_grupo in enumerate(grupos, start=1):
+
+            # --- FILTRA APENAS ÁREAS DE TRABALHO (clusters densos & não-lineares) ---
+            dados_base_mapa = filtrar_areas_trabalho(dados_grupo)
+
+            if dados_base_mapa is None or dados_base_mapa.empty:
+                print(f"   ⚠️  Grupo {idx_grupo} descartado (sem área de trabalho detectada)")
+                continue
+
+            mapa = criar_mapa_simples(dados_base_mapa)
+            if not mapa:
+                print(f"❌ Falha ao gerar mapa para grupo {idx_grupo} de {os.path.basename(arquivo)}")
+                continue
+
             base = os.path.splitext(os.path.basename(arquivo))[0]
             timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-            
-            # Formatação do nome conforme configuração
+
             prefixo = CONFIG['saida']['prefixo_arquivo']
             formato = CONFIG['saida']['formato_nome']
             nome_base = formato.format(
-                nome=base,
+                nome=f"{base}_g{idx_grupo}",
                 tipo='mapa',
                 timestamp=timestamp,
                 prefixo=prefixo
             )
-            
-            # Salva HTML se configurado
-            if CONFIG['saida']['html']:
-                nome_html = f"{nome_base}.html"
+
+            # --- Saída HTML
+            if CONFIG['saida']['html'] or CONFIG['saida']['png']:
+                # Se iremos gerar PNG, precisamos de HTML de qualquer forma
+                nome_html = f"{nome_base}.html" if CONFIG['saida']['html'] else f"temp_{timestamp}_{idx_grupo}.html"
                 caminho_html = os.path.join(pasta_mapas, nome_html)
                 mapa.save(caminho_html)
-                print(f"✅ HTML gerado: {nome_html}")
-            else:
-                # Se PNG ativado mas HTML não, precisamos salvar um HTML temporário
-                if CONFIG['saida']['png']:
-                    nome_html = f"temp_{timestamp}.html"
-                    caminho_html = os.path.join(pasta_mapas, nome_html)
-                    mapa.save(caminho_html)
-                
-            # Salva PNG se configurado
+                if CONFIG['saida']['html']:
+                    print(f"✅ HTML gerado: {nome_html}")
+
+            # --- Saída PNG
             if CONFIG['saida']['png']:
                 nome_png = f"{nome_base}.png"
                 caminho_png = os.path.join(pasta_mapas, nome_png)
-                salvar_screenshot(caminho_html, caminho_png)
+
+                # ---- Ajuste de altura para aspecto A4 ou metade ----
+                if len(grupos) == 1:
+                    altura_png = 1754
+                elif len(grupos) == 2:
+                    altura_png = 1100  # metade A4 com 25% extra de altura
+                else:
+                    altura_png = max(600, int(1754 / len(grupos)))
+                salvar_screenshot(caminho_html, caminho_png, height=altura_png)
                 print(f"✅ PNG gerado: {nome_png}")
-                
-                # Remove HTML temporário se necessário
+
+                # Remove HTML temporário se não for necessário
                 if not CONFIG['saida']['html'] and os.path.exists(caminho_html):
                     try:
                         os.remove(caminho_html)
-                    except:
+                    except Exception:
                         pass
-        else:
-            print(f"❌ Falha ao gerar mapa para {os.path.basename(arquivo)}")
 
     print("\n🎯 Mapas individuais prontos na pasta output/mapas")
 
@@ -1931,10 +1974,23 @@ def criar_mapa_simples(dados):
         all_coords_bounds.extend(coords)
 
     # Ajusta zoom/centro para cobrir todos os pontos
-    if all_coords_bounds:
+    if all_coords_bounds and CONFIG.get('usar_fit_bounds', True):
         lats = [c[0] for c in all_coords_bounds]
         lngs = [c[1] for c in all_coords_bounds]
-        mapa.fit_bounds([[min(lats), min(lngs)], [max(lats), max(lngs)]])
+
+        lat_min, lat_max = min(lats), max(lats)
+        lng_min, lng_max = min(lngs), max(lngs)
+
+        cfg_fb = CONFIG.get('fit_bounds', {})
+        margin_pct = cfg_fb.get('margin_percent', 0.08)
+        min_deg = cfg_fb.get('margin_min_deg', 0.0008)
+
+        # Aplica margem configurável
+        lat_margin = max((lat_max - lat_min) * margin_pct, min_deg)
+        lng_margin = max((lng_max - lng_min) * margin_pct, min_deg)
+
+        mapa.fit_bounds([[lat_min - lat_margin, lng_min - lng_margin],
+                         [lat_max + lat_margin, lng_max + lng_margin]])
 
     # Adiciona legenda
     if legenda_items and CONFIG['legenda']['mostrar']:
@@ -2019,6 +2075,100 @@ def salvar_screenshot(html_path: str, png_path: str, width: int = 1240, height: 
         print(f"🖼️  Screenshot salvo: {os.path.basename(png_path)}")
     except Exception as e:
         print(f"⚠️  Não foi possível gerar screenshot ({os.path.basename(png_path)}): {e}")
+
+# ====================================================================================
+# FUNÇÃO AUXILIAR: SEPARAR GRUPOS DISTANTES (> dist_metros)
+# ====================================================================================
+
+def separar_por_distancia(dados: pd.DataFrame, dist_metros: int = 3000):
+    """Agrupa coordenadas em clusters quando a distância entre eles excede
+    *dist_metros* (default 3 km).  Retorna lista de DataFrames; se não houver
+    separação significativa, retorna lista com único elemento."""
+
+    if dados.empty:
+        return [dados]
+
+    # Conversão segura
+    dados_copy = dados.copy()
+    dados_copy['Latitude'] = pd.to_numeric(dados_copy['Latitude'], errors='coerce')
+    dados_copy['Longitude'] = pd.to_numeric(dados_copy['Longitude'], errors='coerce')
+    dados_copy = dados_copy.dropna(subset=['Latitude', 'Longitude'])
+
+    if len(dados_copy) == 0:
+        return [dados_copy]
+
+    # DBSCAN em coordenadas brutas usando eps em graus
+    eps_deg = dist_metros / 111000
+    try:
+        clustering = DBSCAN(eps=eps_deg, min_samples=1).fit(dados_copy[['Latitude', 'Longitude']].values)
+    except Exception:
+        # Falha inesperada => retorna único grupo
+        return [dados_copy]
+
+    dados_copy['grupo_geo'] = clustering.labels_
+
+    # Se apenas 1 grupo, retorna sem alterações
+    grupos_ids = sorted(dados_copy['grupo_geo'].unique())
+    if len(grupos_ids) <= 1:
+        return [dados_copy]
+
+    grupos = [dados_copy[dados_copy['grupo_geo'] == gid].copy() for gid in grupos_ids]
+    return grupos
+
+# ====================================================================================
+# FUNÇÃO: FILTRAR ÁREAS DE TRABALHO (DESCARTAR DESLOCAMENTOS LINEARES)
+# ====================================================================================
+
+def filtrar_areas_trabalho(dados: pd.DataFrame) -> pd.DataFrame | None:
+    """Retorna somente pontos pertencentes a clusters considerados área de trabalho.
+    O critério utiliza DBSCAN (eps/meters e min_samples do CONFIG) e descarta
+    clusters muito pequenos ou excessivamente lineares (road).  Se nada atender,
+    retorna None."""
+
+    cfg = CONFIG.get('filtro_trabalho', {})
+    if not cfg.get('ativar', True):
+        return dados  # sem filtro
+
+    eps = cfg.get('eps_metros', 200)
+    min_samples = cfg.get('min_samples', 5)
+    min_total = cfg.get('min_total_pontos', 20)
+    ratio_max = cfg.get('linear_ratio_max', 0.25)
+
+    dados_clustered = detectar_areas_trabalho(dados, eps_metros=eps)
+    if dados_clustered is None or dados_clustered.empty:
+        return None
+
+    clusters_validos = []
+
+    for cid in sorted(dados_clustered['cluster'].unique()):
+        df_c = dados_clustered[dados_clustered['cluster'] == cid]
+
+        if len(df_c) < max(min_total, min_samples):
+            # Muito pequeno, descarta
+            continue
+
+        # Avaliar linearidade: relação entre menor/maior dimensão (em metros)
+        lat = df_c['Latitude'].values
+        lng = df_c['Longitude'].values
+        lat_ref = lat.mean()
+        x = (lng - lng.mean()) * 111000 * math.cos(math.radians(lat_ref))
+        y = (lat - lat.mean()) * 111000
+        width = max(x) - min(x)
+        height = max(y) - min(y)
+        menor = min(width, height)
+        maior = max(width, height) if max(width, height) else 1
+        ratio = menor / maior
+
+        if ratio < ratio_max:
+            # Muito linear, provável deslocamento → descarta
+            continue
+
+        clusters_validos.append(df_c)
+
+    if not clusters_validos:
+        return None
+
+    return pd.concat(clusters_validos, ignore_index=True)
 
 if __name__ == "__main__":
     main()
