@@ -37,7 +37,7 @@ CONFIG = {
     
     # Controle de saída
     'saida': {
-        'html': False,                     # Gerar arquivo HTML
+        'html': True,                     # Gerar arquivo HTML
         'png': True,                      # Gerar arquivo PNG
         'limpar_pasta': True,            # Limpar pasta de mapas antes de gerar novos
         'prefixo_arquivo': '',            # Prefixo opcional para nomes de arquivos
@@ -84,9 +84,9 @@ CONFIG = {
     # Ajustes do fit_bounds quando ativado
     'fit_bounds': {
         # Porcentagem extra de margem (0.08 = 8%)
-        'margin_percent': 0.05,
+        'margin_percent': 0.08,
         # Margem mínima em graus para evitar zoom exagerado (≈ 0.0008 ≈ 90 m)
-        'margin_min_deg': 0.0005
+        'margin_min_deg': 0.0008
     },
 }
 
@@ -1822,60 +1822,80 @@ def main():
 
         for idx_grupo, dados_grupo in enumerate(grupos, start=1):
 
-            # --- FILTRA APENAS ÁREAS DE TRABALHO (clusters densos & não-lineares) ---
-            dados_base_mapa = filtrar_areas_trabalho(dados_grupo)
+            # ------------------------------------------------------------------
+            # Dentro de cada grupo geográfico, identificamos *cada* área de trabalho
+            # (clusters densos & não lineares) e geramos mapas separados.
+            # ------------------------------------------------------------------
 
-            if dados_base_mapa is None or dados_base_mapa.empty:
-                print(f"   ⚠️  Grupo {idx_grupo} descartado (sem área de trabalho detectada)")
+            # Detecta clusters (áreas de trabalho) dentro do grupo
+            cfg_ft = CONFIG.get('filtro_trabalho', {})
+            eps_c = cfg_ft.get('eps_metros', 200)
+            dados_clustered = detectar_areas_trabalho(dados_grupo, eps_metros=eps_c)
+
+            if dados_clustered is None or dados_clustered.empty:
+                print(f"   ⚠️  Grupo {idx_grupo} descartado (nenhum cluster encontrado)")
                 continue
 
-            mapa = criar_mapa_simples(dados_base_mapa)
-            if not mapa:
-                print(f"❌ Falha ao gerar mapa para grupo {idx_grupo} de {os.path.basename(arquivo)}")
-                continue
+            clusters_ids = sorted(dados_clustered['cluster'].unique())
+            print(f"   • {len(clusters_ids)} área(s) de trabalho detectadas no grupo {idx_grupo}")
 
-            base = os.path.splitext(os.path.basename(arquivo))[0]
-            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            for idx_area, cid in enumerate(clusters_ids, start=1):
+                df_area = dados_clustered[dados_clustered['cluster'] == cid].copy()
 
-            prefixo = CONFIG['saida']['prefixo_arquivo']
-            formato = CONFIG['saida']['formato_nome']
-            nome_base = formato.format(
-                nome=f"{base}_g{idx_grupo}",
-                tipo='mapa',
-                timestamp=timestamp,
-                prefixo=prefixo
-            )
+                # Filtra para garantir que é área válida (não linear, tamanho mínimo, etc.)
+                df_valida = filtrar_areas_trabalho(df_area)
+                if df_valida is None or df_valida.empty:
+                    print(f"      ⚠️  Área {idx_area} descartada (não atende critérios)")
+                    continue
 
-            # --- Saída HTML
-            if CONFIG['saida']['html'] or CONFIG['saida']['png']:
-                # Se iremos gerar PNG, precisamos de HTML de qualquer forma
-                nome_html = f"{nome_base}.html" if CONFIG['saida']['html'] else f"temp_{timestamp}_{idx_grupo}.html"
-                caminho_html = os.path.join(pasta_mapas, nome_html)
-                mapa.save(caminho_html)
-                if CONFIG['saida']['html']:
-                    print(f"✅ HTML gerado: {nome_html}")
+                mapa = criar_mapa_simples(df_valida)
+                if not mapa:
+                    print(f"❌ Falha ao gerar mapa para área {idx_area} do grupo {idx_grupo}")
+                    continue
 
-            # --- Saída PNG
-            if CONFIG['saida']['png']:
-                nome_png = f"{nome_base}.png"
-                caminho_png = os.path.join(pasta_mapas, nome_png)
+                base = os.path.splitext(os.path.basename(arquivo))[0]
+                timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
 
-                # ---- Ajuste de altura para aspecto A4 ou metade ----
-                if len(grupos) == 1:
-                    altura_png = 1754
-                elif len(grupos) == 2:
-                    altura_png = 1100  # metade A4 com 25% extra de altura
-                else:
-                    altura_png = max(600, int(1754 / len(grupos)))
-                salvar_screenshot(caminho_html, caminho_png, height=altura_png)
-                print(f"✅ PNG gerado: {nome_png}")
+                prefixo = CONFIG['saida']['prefixo_arquivo']
+                formato = CONFIG['saida']['formato_nome']
+                nome_base = formato.format(
+                    nome=f"{base}_g{idx_grupo}_a{idx_area}",
+                    tipo='mapa',
+                    timestamp=timestamp,
+                    prefixo=prefixo
+                )
 
-                # Remove HTML temporário se não for necessário
-                if not CONFIG['saida']['html'] and os.path.exists(caminho_html):
-                    try:
-                        os.remove(caminho_html)
-                    except Exception:
-                        pass
+                # --- Saída HTML
+                if CONFIG['saida']['html'] or CONFIG['saida']['png']:
+                    # Se iremos gerar PNG, precisamos de HTML de qualquer forma
+                    nome_html = f"{nome_base}.html" if CONFIG['saida']['html'] else f"temp_{timestamp}_{idx_grupo}_{idx_area}.html"
+                    caminho_html = os.path.join(pasta_mapas, nome_html)
+                    mapa.save(caminho_html)
+                    if CONFIG['saida']['html']:
+                        print(f"✅ HTML gerado: {nome_html}")
+
+                # --- Saída PNG
+                if CONFIG['saida']['png']:
+                    nome_png = f"{nome_base}.png"
+                    caminho_png = os.path.join(pasta_mapas, nome_png)
+
+                    # Ajuste de altura: distribui verticalmente pelas áreas detectadas
+                    if len(clusters_ids) == 1:
+                        altura_png = 1754
+                    elif len(clusters_ids) == 2:
+                        altura_png = 1100
+                    else:
+                        altura_png = max(600, int(1754 / len(clusters_ids)))
+
+                    salvar_screenshot(caminho_html, caminho_png, height=altura_png)
+                    print(f"✅ PNG gerado: {nome_png}")
+
+                    # Remove HTML temporário se não for necessário
+                    if not CONFIG['saida']['html'] and os.path.exists(caminho_html):
+                        try:
+                            os.remove(caminho_html)
+                        except Exception:
+                            pass
 
     print("\n🎯 Mapas individuais prontos na pasta output/mapas")
 
