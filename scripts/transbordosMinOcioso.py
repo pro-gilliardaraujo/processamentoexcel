@@ -204,6 +204,13 @@ def processar_arquivo_base(caminho_arquivo):
                 else:
                     print("Coluna GPS já existe com valores. Mantendo os valores originais.")
                 
+                # Criar coluna alias 'RTK' (0/1) para compatibilidade com cálculos posteriores
+                if 'RTK' not in df.columns:
+                    df['RTK'] = df['RTK (Piloto Automatico)']
+                else:
+                    # Se já existe, garantir que seja numérica 0/1
+                    df['RTK'] = pd.to_numeric(df['RTK'], errors='coerce').fillna(0).astype(int)
+                
                 # IMPORTANTE: Zerar GPS dos operadores excluídos para garantir que não sejam contabilizados  
                 df.loc[df['Operador'].isin(OPERADORES_EXCLUIR), 'GPS'] = 0
                     
@@ -726,6 +733,9 @@ def calcular_eficiencia_energetica(base_calculo):
     # Selecionar apenas as colunas relevantes
     df_temp = base_calculo[colunas_necessarias].copy()
     
+    # Determinar nome da coluna de frota na base (Equipamento ou Frota)
+    col_frota = 'Equipamento' if 'Equipamento' in base_calculo.columns else 'Frota'
+    
     # Agrupar por operador e calcular a soma
     agrupado = df_temp.groupby('Operador').sum().reset_index()
     
@@ -738,7 +748,7 @@ def calcular_eficiencia_energetica(base_calculo):
     resultados = []
     for _, row in agrupado.iterrows():
         operador = row['Operador']
-        frotas = sorted(base_calculo[base_calculo['Operador'] == operador]['Equipamento'].astype(str).unique())
+        frotas = sorted(base_calculo[base_calculo['Operador'] == operador][col_frota].astype(str).unique())
         operador_nome = f"{operador} ({', '.join(frotas)})" if frotas else operador
         resultados.append({'Operador': operador_nome, 'Eficiência': row['Eficiência']})
     
@@ -768,6 +778,8 @@ def calcular_motor_ocioso(base_calculo, df_base=None):
     # Selecionar apenas as colunas relevantes
     df_temp = base_calculo[colunas_necessarias].copy()
     
+    col_frota = 'Equipamento' if 'Equipamento' in base_calculo.columns else 'Frota'
+    
     # Agrupar por operador
     agrupado = df_temp.groupby('Operador').agg({
         'Motor Ligado': 'sum',
@@ -785,7 +797,7 @@ def calcular_motor_ocioso(base_calculo, df_base=None):
     resultado = []
     for _, row in agrupado.iterrows():
         operador = row['Operador']
-        frotas = sorted(base_calculo[base_calculo['Operador'] == operador]['Equipamento'].astype(str).unique())
+        frotas = sorted(base_calculo[base_calculo['Operador'] == operador][col_frota].astype(str).unique())
         operador_nome = f"{operador} ({', '.join(frotas)})" if frotas else operador
         resultado.append({
             'Operador': operador_nome,
@@ -829,6 +841,8 @@ def calcular_falta_apontamento(base_calculo):
     # Selecionar apenas as colunas relevantes
     df_temp = base_calculo[colunas_necessarias].copy()
     
+    col_frota = 'Equipamento' if 'Equipamento' in base_calculo.columns else 'Frota'
+    
     # Agrupar por operador e calcular a média
     agrupado = df_temp.groupby('Operador')['% Falta de Apontamento'].mean().reset_index()
     
@@ -839,7 +853,7 @@ def calcular_falta_apontamento(base_calculo):
     resultados = []
     for _, row in agrupado.iterrows():
         op = row['Operador']
-        frotas = sorted(base_calculo[base_calculo['Operador'] == op]['Equipamento'].astype(str).unique())
+        frotas = sorted(base_calculo[base_calculo['Operador'] == op][col_frota].astype(str).unique())
         op_nome = f"{op} ({', '.join(frotas)})" if frotas else op
         resultados.append({'Operador': op_nome, 'Porcentagem': row['Porcentagem']})
 
@@ -873,6 +887,8 @@ def calcular_uso_gps(base_calculo):
     # Selecionar apenas as colunas relevantes
     df_temp = base_calculo[colunas_necessarias].copy()
     
+    col_frota = 'Equipamento' if 'Equipamento' in base_calculo.columns else 'Frota'
+    
     # Agrupar por operador e calcular a média ponderada
     agrupado = df_temp.groupby('Operador')['% Utilização GPS'].mean().reset_index()
     
@@ -883,7 +899,7 @@ def calcular_uso_gps(base_calculo):
     resultados = []
     for _, row in agrupado.iterrows():
         op = row['Operador']
-        frotas = sorted(base_calculo[base_calculo['Operador'] == op]['Equipamento'].astype(str).unique())
+        frotas = sorted(base_calculo[base_calculo['Operador'] == op][col_frota].astype(str).unique())
         op_nome = f"{op} ({', '.join(frotas)})" if frotas else op
         resultados.append({'Operador': op_nome, 'Porcentagem': row['Porcentagem']})
 
@@ -1957,6 +1973,13 @@ def calcular_base_calculo(df):
     Calcula as métricas base para cada operador/frota.
     Retorna um DataFrame com as métricas calculadas.
     """
+    # Função utilitária local para evitar divisão por zero
+    def calcular_porcentagem(numerador, denominador, precisao: int = 4):
+        """Retorna numerador/denominador arredondado, ou 0 se denominador==0"""
+        if denominador and denominador > 0:
+            return round(numerador / denominador, precisao)
+        return 0.0
+    
     resultados_base_calculo = []
     
     # Verificar se existem as colunas necessárias
