@@ -1734,8 +1734,8 @@ def processar_arquivo(caminho_arquivo, diretorio_saida):
     # Obter apenas o nome do arquivo (sem caminho e sem extensão)
     nome_base = os.path.splitext(os.path.basename(caminho_arquivo))[0]
     
-    # Nome de saída igual ao original, mas com sufixo "_min" e extensão .xlsx na pasta output
-    arquivo_saida = os.path.join(diretorio_saida, f"{nome_base}_min.xlsx")
+    # Nome de saída igual ao original, mas com sufixo "_processado" e extensão .xlsx na pasta output
+    arquivo_saida = os.path.join(diretorio_saida, f"{nome_base}_processado.xlsx")
     
     print(f"\nProcessando arquivo: {os.path.basename(caminho_arquivo)}")
     print(f"Arquivo de saída: {os.path.basename(arquivo_saida)}")

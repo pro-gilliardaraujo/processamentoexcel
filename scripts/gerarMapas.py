@@ -29,8 +29,10 @@ CONFIG = {
     'line_opacity': 0.75,
     # Lista de cores para equipamentos (será usada ciclicamente)
     'cores_equipamentos': [
-        'red', 'blue', 'green', 'purple', 'orange',
-        'darkred', 'darkblue', 'darkgreen', 'pink', 'gray'
+        'blue', 'purple', 'orange', 'pink', 'yellow', 
+        'cyan', 'magenta', 'lime', 'indigo', 'violet', 
+        'turquoise', 'gold', 'coral', 'salmon', 'plum', 
+        'khaki', 'navy', 'teal', 'brown', 'gray'
     ],
     # Mostrar marcadores de início/fim (True/False)
     'marcadores_inicio_fim': True,
@@ -61,6 +63,46 @@ CONFIG = {
         'espaco_itens': 12,                # Espaço vertical entre itens
         'espaco_horizontal': 16,           # Espaço entre círculo e texto
         'negrito': True                    # Texto em negrito
+    },
+    
+    # Configurações específicas para legenda RTK (sobrescreve as configurações da legenda normal)
+    'legenda_rtk': {
+        'largura': 150,                    # Largura menor para textos curtos
+        'padding': '8px 12px',             # Padding menor
+        'tamanho_circulo': 14,             # Círculos menores
+        'tamanho_fonte': 16,               # Fonte menor
+        'espaco_itens': 8,                 # Espaço menor entre itens
+        'espaco_horizontal': 8,            # Espaço menor entre círculo e texto
+    },
+    
+    # Configurações específicas para mapa RTK (pontos e linhas)
+    'mapa_rtk': {
+        # Configurações dos pontos verdes (RTK Ligado)
+        'ponto_verde': {
+            'raio': 1,                     # Tamanho do ponto verde (aumentado para zoom afastado)
+            'opacidade': 0.8,              # Transparência do ponto verde (0.0 a 1.0)
+            'cor_borda': 'green',          # Cor da borda do ponto
+            'espessura_borda': 1,          # Espessura da borda do ponto
+        },
+        # Configurações dos pontos vermelhos (RTK Desligado)
+        'ponto_vermelho': {
+            'raio': 1,                     # Tamanho do ponto vermelho (aumentado para zoom afastado)
+            'opacidade': 1.0,              # Transparência do ponto vermelho (0.0 a 1.0)
+            'cor_borda': 'red',            # Cor da borda do ponto
+            'espessura_borda': 1,          # Espessura da borda do ponto
+        },
+        # Configurações das linhas verdes (RTK Ligado)
+        'linha_verde': {
+            'espessura': 3,                # Espessura da linha verde (aumentada para zoom afastado)
+            'opacidade': 0.8,              # Transparência da linha verde (0.0 a 1.0)
+            'cor': 'green',                # Cor da linha (caso queira personalizar)
+        },
+        # Configurações das linhas vermelhas (RTK Desligado)
+        'linha_vermelha': {
+            'espessura': 5,                # Espessura da linha vermelha (dobro da verde)
+            'opacidade': 1.0,              # Transparência da linha vermelha (+0.2 da verde)
+            'cor': 'red',                  # Cor da linha (caso queira personalizar)
+        },
     },
 
     # --------------------------------------------------------------
@@ -1839,6 +1881,94 @@ def main():
             clusters_ids = sorted(dados_clustered['cluster'].unique())
             print(f"   • {len(clusters_ids)} área(s) de trabalho detectadas no grupo {idx_grupo}")
 
+            # Criar um único mapa HTML com todas as áreas do grupo
+            base = os.path.splitext(os.path.basename(arquivo))[0]
+            # Remover sufixo "_Coordenadas" se existir para ter nome mais limpo
+            if base.endswith('_Coordenadas'):
+                base = base[:-12]  # Remove "_Coordenadas"
+            
+            # Nome do HTML unificado
+            nome_html_unificado = f"{base}_Mapa.html"
+            caminho_html_unificado = os.path.join(pasta_mapas, nome_html_unificado)
+            
+            # Criar mapa unificado com todas as áreas válidas
+            mapa_unificado = criar_mapa_simples(dados_clustered)
+            if mapa_unificado:
+                mapa_unificado.save(caminho_html_unificado)
+                print(f"✅ HTML unificado gerado: {nome_html_unificado}")
+
+            # Criar mapa de uso GPS unificado (RTK verde/vermelho) - usar TODOS os dados, não apenas clusters
+            nome_html_gps = f"{base}_UsoGPS.html"
+            caminho_html_gps = os.path.join(pasta_mapas, nome_html_gps)
+            
+            mapa_gps = criar_mapa_uso_gps(dados_grupo)  # usar dados_grupo (todos os pontos) em vez de dados_clustered
+            if mapa_gps:
+                mapa_gps.save(caminho_html_gps)
+                print(f"✅ HTML uso GPS gerado: {nome_html_gps}")
+                
+                # Gerar PNG do mapa de uso GPS também
+                if CONFIG['saida']['png']:
+                    nome_png_gps = f"{base}_UsoGPS.png"
+                    caminho_png_gps = os.path.join(pasta_mapas, nome_png_gps)
+                    
+                    # Altura baseada no número de clusters
+                    if len(clusters_ids) == 1:
+                        altura_png = 1754
+                    elif len(clusters_ids) == 2:
+                        altura_png = 1100
+                    else:
+                        altura_png = max(600, int(1754 / len(clusters_ids)))
+                    
+                    salvar_screenshot(caminho_html_gps, caminho_png_gps, height=altura_png)
+                    print(f"✅ PNG uso GPS gerado: {nome_png_gps}")
+            else:
+                print(f"⚠️ Não foi possível gerar mapa de uso GPS para {nome_html_gps}")
+
+            # Gerar mapas RTK separados por área (mesma lógica dos mapas normais)
+            for idx_area, cid in enumerate(clusters_ids, start=1):
+                df_area_rtk = dados_clustered[dados_clustered['cluster'] == cid].copy()
+
+                # Filtra para garantir que é área válida (não linear, tamanho mínimo, etc.)
+                df_valida_rtk = filtrar_areas_trabalho(df_area_rtk)
+                if df_valida_rtk is None or df_valida_rtk.empty:
+                    print(f"      ⚠️  Área RTK {idx_area} descartada (não atende critérios)")
+                    continue
+
+                # Criar mapa RTK individual apenas para PNG
+                mapa_rtk_individual = criar_mapa_uso_gps(df_valida_rtk)
+                if not mapa_rtk_individual:
+                    print(f"❌ Falha ao gerar mapa RTK para área {idx_area} do grupo {idx_grupo}")
+                    continue
+
+                # Nome do PNG RTK individual
+                nome_png_rtk = f"{base}_UsoGPS{idx_area}.png"
+                caminho_png_rtk = os.path.join(pasta_mapas, nome_png_rtk)
+
+                # Criar HTML temporário para gerar PNG RTK
+                nome_html_temp_rtk = f"temp_{base}_UsoGPS{idx_area}.html"
+                caminho_html_temp_rtk = os.path.join(pasta_mapas, nome_html_temp_rtk)
+                mapa_rtk_individual.save(caminho_html_temp_rtk)
+
+                # --- Saída PNG RTK
+                if CONFIG['saida']['png']:
+                    # Ajuste de altura: distribui verticalmente pelas áreas detectadas
+                    if len(clusters_ids) == 1:
+                        altura_png_rtk = 1754
+                    elif len(clusters_ids) == 2:
+                        altura_png_rtk = 1100
+                    else:
+                        altura_png_rtk = max(600, int(1754 / len(clusters_ids)))
+
+                    salvar_screenshot(caminho_html_temp_rtk, caminho_png_rtk, height=altura_png_rtk)
+                    print(f"✅ PNG RTK gerado: {nome_png_rtk}")
+
+                # Remove HTML temporário RTK
+                try:
+                    os.remove(caminho_html_temp_rtk)
+                except Exception:
+                    pass
+
+            # Gerar PNGs separados por área
             for idx_area, cid in enumerate(clusters_ids, start=1):
                 df_area = dados_clustered[dados_clustered['cluster'] == cid].copy()
 
@@ -1848,37 +1978,23 @@ def main():
                     print(f"      ⚠️  Área {idx_area} descartada (não atende critérios)")
                     continue
 
-                mapa = criar_mapa_simples(df_valida)
-                if not mapa:
+                # Criar mapa individual apenas para PNG
+                mapa_individual = criar_mapa_simples(df_valida)
+                if not mapa_individual:
                     print(f"❌ Falha ao gerar mapa para área {idx_area} do grupo {idx_grupo}")
                     continue
 
-                base = os.path.splitext(os.path.basename(arquivo))[0]
-                timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+                # Nome do PNG individual
+                nome_png = f"{base}_Mapa{idx_area}.png"
+                caminho_png = os.path.join(pasta_mapas, nome_png)
 
-                prefixo = CONFIG['saida']['prefixo_arquivo']
-                formato = CONFIG['saida']['formato_nome']
-                nome_base = formato.format(
-                    nome=f"{base}_g{idx_grupo}_a{idx_area}",
-                    tipo='mapa',
-                    timestamp=timestamp,
-                    prefixo=prefixo
-                )
-
-                # --- Saída HTML
-                if CONFIG['saida']['html'] or CONFIG['saida']['png']:
-                    # Se iremos gerar PNG, precisamos de HTML de qualquer forma
-                    nome_html = f"{nome_base}.html" if CONFIG['saida']['html'] else f"temp_{timestamp}_{idx_grupo}_{idx_area}.html"
-                    caminho_html = os.path.join(pasta_mapas, nome_html)
-                    mapa.save(caminho_html)
-                    if CONFIG['saida']['html']:
-                        print(f"✅ HTML gerado: {nome_html}")
+                # Criar HTML temporário para gerar PNG
+                nome_html_temp = f"temp_{base}_Mapa{idx_area}.html"
+                caminho_html_temp = os.path.join(pasta_mapas, nome_html_temp)
+                mapa_individual.save(caminho_html_temp)
 
                 # --- Saída PNG
                 if CONFIG['saida']['png']:
-                    nome_png = f"{nome_base}.png"
-                    caminho_png = os.path.join(pasta_mapas, nome_png)
-
                     # Ajuste de altura: distribui verticalmente pelas áreas detectadas
                     if len(clusters_ids) == 1:
                         altura_png = 1754
@@ -1887,15 +2003,14 @@ def main():
                     else:
                         altura_png = max(600, int(1754 / len(clusters_ids)))
 
-                    salvar_screenshot(caminho_html, caminho_png, height=altura_png)
+                    salvar_screenshot(caminho_html_temp, caminho_png, height=altura_png)
                     print(f"✅ PNG gerado: {nome_png}")
 
-                    # Remove HTML temporário se não for necessário
-                    if not CONFIG['saida']['html'] and os.path.exists(caminho_html):
-                        try:
-                            os.remove(caminho_html)
-                        except Exception:
-                            pass
+                # Remove HTML temporário
+                try:
+                    os.remove(caminho_html_temp)
+                except Exception:
+                    pass
 
     print("\n🎯 Mapas individuais prontos na pasta output/mapas")
 
@@ -1915,6 +2030,46 @@ def _cor_equip(idx: int) -> str:
     return '#{:02x}{:02x}{:02x}'.format(int(r * 255), int(g * 255), int(b * 255))
 
 
+def calcular_zoom_inteligente(dados):
+    """
+    Calcula zoom apropriado baseado na dispersão dos dados para evitar 
+    erro 'Map data not yet available' em zooms muito próximos.
+    """
+    if dados.empty:
+        return 16  # zoom padrão
+    
+    lats = pd.to_numeric(dados['Latitude'], errors='coerce').dropna()
+    lngs = pd.to_numeric(dados['Longitude'], errors='coerce').dropna()
+    
+    if len(lats) == 0 or len(lngs) == 0:
+        return 16
+    
+    # Calcular dispersão dos dados
+    lat_range = lats.max() - lats.min()
+    lng_range = lngs.max() - lngs.min()
+    
+    # Maior dispersão entre lat/lng
+    max_range = max(lat_range, lng_range)
+    
+    # Determinar zoom baseado na dispersão
+    if max_range > 0.1:      # > ~11km
+        return 12
+    elif max_range > 0.05:   # > ~5.5km  
+        return 13
+    elif max_range > 0.02:   # > ~2.2km
+        return 14
+    elif max_range > 0.01:   # > ~1.1km
+        return 15
+    elif max_range > 0.005:  # > ~550m
+        return 16
+    elif max_range > 0.002:  # > ~220m
+        return 17
+    elif max_range > 0.001:  # > ~110m
+        return 18
+    else:
+        return 17  # Para áreas muito pequenas, não passar de 17 para evitar erro
+
+
 def criar_mapa_simples(dados):
     """Cria mapa simples conectando pontos de cada equipamento por uma linha colorida."""
     if dados.empty:
@@ -1924,9 +2079,13 @@ def criar_mapa_simples(dados):
     lat_centro = dados['Latitude'].mean()
     lng_centro = dados['Longitude'].mean()
 
+    # Calcular zoom inteligente para evitar erro "Map data not yet available"
+    zoom_inteligente = calcular_zoom_inteligente(dados)
+    print(f"   📍 Zoom calculado: {zoom_inteligente} (dispersão dos dados)")
+
     mapa = folium.Map(
         location=[lat_centro, lng_centro],
-        zoom_start=CONFIG['zoom_start'],
+        zoom_start=zoom_inteligente,
         tiles=CONFIG['base_tile']
     )
 
@@ -2009,6 +2168,13 @@ def criar_mapa_simples(dados):
         lat_margin = max((lat_max - lat_min) * margin_pct, min_deg)
         lng_margin = max((lng_max - lng_min) * margin_pct, min_deg)
 
+        # Verificar se a área não é muito pequena (evita zoom excessivo)
+        area_total = (lat_max - lat_min + 2*lat_margin) * (lng_max - lng_min + 2*lng_margin)
+        if area_total < 0.0001:  # Área muito pequena (~100m x 100m)
+            print(f"   ⚠️  Área muito pequena detectada, ajustando margem mínima")
+            lat_margin = max(lat_margin, 0.002)  # ~220m mínimo
+            lng_margin = max(lng_margin, 0.002)
+
         mapa.fit_bounds([[lat_min - lat_margin, lng_min - lng_margin],
                          [lat_max + lat_margin, lng_max + lng_margin]])
 
@@ -2089,7 +2255,13 @@ def salvar_screenshot(html_path: str, png_path: str, width: int = 1240, height: 
 
         driver = webdriver.Chrome(options=opts)
         driver.get(pathlib.Path(html_path).as_uri())
-        time.sleep(2)  # aguarda renderização
+        
+        # Aguarda carregamento inicial
+        time.sleep(3)
+        
+        # Aguarda carregamento dos tiles
+        time.sleep(2)
+        
         driver.save_screenshot(png_path)
         driver.quit()
         print(f"🖼️  Screenshot salvo: {os.path.basename(png_path)}")
@@ -2189,6 +2361,229 @@ def filtrar_areas_trabalho(dados: pd.DataFrame) -> pd.DataFrame | None:
         return None
 
     return pd.concat(clusters_validos, ignore_index=True)
+
+# ====================================================================================
+# MAPA COM CORES RTK (VERDE/VERMELHO)
+# ====================================================================================
+
+def criar_mapa_uso_gps(dados):
+    """
+    Cria mapa com trajetos coloridos baseados na coluna RTK:
+    - Verde: RTK = "Sim" 
+    - Vermelho: RTK = "Não"
+    """
+    if dados.empty:
+        print("Sem dados para criar mapa de uso GPS!")
+        return None
+
+    # Verificar se existe coluna RTK
+    if 'RTK' not in dados.columns:
+        print("⚠️ Coluna RTK não encontrada! Necessária para mapa de uso GPS.")
+        return None
+
+    lat_centro = dados['Latitude'].mean()
+    lng_centro = dados['Longitude'].mean()
+
+    # Calcular zoom inteligente
+    zoom_inteligente = calcular_zoom_inteligente(dados)
+    print(f"   📍 Zoom calculado para uso GPS: {zoom_inteligente}")
+
+    mapa = folium.Map(
+        location=[lat_centro, lng_centro],
+        zoom_start=zoom_inteligente,
+        tiles=CONFIG['base_tile']
+    )
+
+    if CONFIG['satellite_layer']:
+        folium.TileLayer(
+            tiles='https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+            attr='Esri', name='Satélite').add_to(mapa)
+
+    equipamentos = dados['Equipamento'].unique() if 'Equipamento' in dados.columns else ['Único']
+    all_coords_bounds = []
+
+    for equipamento in equipamentos:
+        if 'Equipamento' in dados.columns:
+            df_equip = dados[dados['Equipamento'] == equipamento].copy()
+        else:
+            df_equip = dados.copy()
+
+        # Limpar e ordenar dados
+        df_equip['Latitude'] = pd.to_numeric(df_equip['Latitude'], errors='coerce')
+        df_equip['Longitude'] = pd.to_numeric(df_equip['Longitude'], errors='coerce')
+        if 'Hora' in df_equip.columns:
+            try:
+                df_equip = df_equip.sort_values('Hora')
+            except:
+                pass
+
+        df_equip = df_equip.dropna(subset=['Latitude', 'Longitude'])
+
+        if len(df_equip) < 2:
+            continue
+
+        # Converter para lista para facilitar iteração sequencial
+        coords_list = []
+        for _, row in df_equip.iterrows():
+            coords_list.append({
+                'lat': row['Latitude'],
+                'lng': row['Longitude'],
+                'rtk': row['RTK']
+            })
+        
+        # Obter configurações específicas do mapa RTK
+        config_rtk = CONFIG.get('mapa_rtk', {})
+        
+        # Criar pontos e linhas conectando ponto a ponto
+        for i, ponto in enumerate(coords_list):
+            lat = ponto['lat']
+            lng = ponto['lng']
+            rtk_status = ponto['rtk']
+            
+            # Definir configurações baseadas no RTK
+            if rtk_status == 'Sim':
+                config_ponto = config_rtk.get('ponto_verde', {})
+                config_linha = config_rtk.get('linha_verde', {})
+                popup_text = f"RTK LIGADO - {equipamento}"
+            else:
+                config_ponto = config_rtk.get('ponto_vermelho', {})
+                config_linha = config_rtk.get('linha_vermelha', {})
+                popup_text = f"RTK DESLIGADO - {equipamento}"
+            
+            # Extrair configurações do ponto com valores padrão
+            raio_ponto = config_ponto.get('raio', 3)
+            opacidade_ponto = config_ponto.get('opacidade', 0.8)
+            cor_borda = config_ponto.get('cor_borda', 'green' if rtk_status == 'Sim' else 'red')
+            espessura_borda = config_ponto.get('espessura_borda', 1)
+            cor_preenchimento = cor_borda  # Usar mesma cor da borda para preenchimento
+            
+            # Criar marcador circular com configurações específicas
+            folium.CircleMarker(
+                location=[lat, lng],
+                radius=raio_ponto,
+                color=cor_borda,
+                fill=True,
+                fillColor=cor_preenchimento,
+                fillOpacity=opacidade_ponto,
+                weight=espessura_borda,
+                popup=popup_text
+            ).add_to(mapa)
+            
+            # Conectar ao próximo ponto (se existir) com linha da cor do ponto atual
+            if i < len(coords_list) - 1:
+                proximo_ponto = coords_list[i + 1]
+                
+                # Extrair configurações da linha
+                cor_linha = config_linha.get('cor', 'green' if rtk_status == 'Sim' else 'red')
+                espessura_linha = config_linha.get('espessura', 2)
+                opacidade_linha = config_linha.get('opacidade', 0.7)
+                
+                # Criar linha do ponto atual até o próximo com configurações específicas
+                folium.PolyLine(
+                    locations=[[lat, lng], [proximo_ponto['lat'], proximo_ponto['lng']]],
+                    color=cor_linha,
+                    weight=espessura_linha,
+                    opacity=opacidade_linha,
+                    popup=f"Segmento {popup_text}"
+                ).add_to(mapa)
+            
+            all_coords_bounds.append([lat, lng])
+
+    # Ajustar bounds do mapa
+    if all_coords_bounds and CONFIG.get('usar_fit_bounds', True):
+        lats = [c[0] for c in all_coords_bounds]
+        lngs = [c[1] for c in all_coords_bounds]
+
+        lat_min, lat_max = min(lats), max(lats)
+        lng_min, lng_max = min(lngs), max(lngs)
+
+        cfg_fb = CONFIG.get('fit_bounds', {})
+        margin_pct = cfg_fb.get('margin_percent', 0.08)
+        min_deg = cfg_fb.get('margin_min_deg', 0.0008)
+
+        lat_margin = max((lat_max - lat_min) * margin_pct, min_deg)
+        lng_margin = max((lng_max - lng_min) * margin_pct, min_deg)
+
+        # Verificar se a área não é muito pequena (evita zoom excessivo) - IGUAL AO MAPA NORMAL
+        area_total = (lat_max - lat_min + 2*lat_margin) * (lng_max - lng_min + 2*lng_margin)
+        if area_total < 0.0001:  # Área muito pequena (~100m x 100m)
+            print(f"   ⚠️  Área muito pequena detectada, ajustando margem mínima")
+            lat_margin = max(lat_margin, 0.002)  # ~220m mínimo
+            lng_margin = max(lng_margin, 0.002)
+
+        mapa.fit_bounds([[lat_min - lat_margin, lng_min - lng_margin],
+                         [lat_max + lat_margin, lng_max + lng_margin]])
+
+    # Adicionar legenda RTK usando mesma posição e estilo do mapa comum
+    if CONFIG['legenda']['mostrar']:
+        # Posicionamento da legenda (mesmo do mapa comum)
+        posicao = CONFIG['legenda']['posicao']
+        if posicao == 'top-left':
+            pos_css = 'top: 20px; left: 10px;'
+        elif posicao == 'top-right':
+            pos_css = 'top: 20px; right: 10px;'
+        elif posicao == 'bottom-left':
+            pos_css = 'bottom: 20px; left: 10px;'
+        else:  # bottom-right (padrão)
+            pos_css = 'bottom: 20px; right: 10px;'
+            
+        # Usar configurações específicas da legenda RTK (com fallback para legenda normal)
+        config_legenda = CONFIG['legenda']
+        config_rtk = CONFIG.get('legenda_rtk', {})
+        
+        # Aplicar configurações RTK sobrescrevendo as normais
+        largura = config_rtk.get('largura', config_legenda['largura'])
+        padding = config_rtk.get('padding', config_legenda['padding'])
+        tamanho_fonte = config_rtk.get('tamanho_fonte', config_legenda['tamanho_fonte'])
+        tam_circulo = config_rtk.get('tamanho_circulo', config_legenda['tamanho_circulo'])
+        espaco_h = config_rtk.get('espaco_horizontal', config_legenda['espaco_horizontal'])
+        espaco_v = config_rtk.get('espaco_itens', config_legenda['espaco_itens'])
+        
+        legenda_html = f'<div style="position: fixed; {pos_css} ' \
+                       f'z-index:9999; ' \
+                       f'background: {config_legenda["fundo"]}; ' \
+                       f'padding: {padding}; ' \
+                       f'border: {config_legenda["borda"]}; ' \
+                       f'font-size: {tamanho_fonte}px; ' \
+                       f'line-height: {tamanho_fonte * 1.4}px; ' \
+                       f'width: {largura}px; ' \
+                       f'border-radius: {config_legenda["raio_borda"]}px; ' \
+                       f'box-shadow: {config_legenda["sombra"]};' \
+                       f'">'
+                       
+        # Texto em negrito se configurado
+        estilo_texto = 'font-weight:bold;' if config_legenda.get('negrito', False) else ''
+        
+        # Itens da legenda RTK com cores específicas das configurações
+        config_rtk_mapa = CONFIG.get('mapa_rtk', {})
+        cor_verde = config_rtk_mapa.get('ponto_verde', {}).get('cor_borda', 'green')
+        cor_vermelha = config_rtk_mapa.get('ponto_vermelho', {}).get('cor_borda', 'red')
+        
+        # Itens da legenda RTK
+        itens_legenda = [('Ligado', 'green'), ('Desligado', 'red')]
+        
+        for idx, (nome, cor) in enumerate(itens_legenda):
+            margin_bottom = f'margin-bottom:{espaco_v}px;' if idx < len(itens_legenda) - 1 else ''
+            
+            # Forçar cores específicas para garantir funcionamento
+            cor_final = 'green' if nome == 'Ligado' else 'red'
+            
+            legenda_html += f'<div style="display:flex; align-items:center; {margin_bottom}">' \
+                            f'<div style="width:{tam_circulo}px; height:{tam_circulo}px; ' \
+                            f'border-radius:50%; background-color:{cor_final}; ' \
+                            f'border: 1px solid {cor_final}; display: inline-block;"></div>' \
+                            f'<div style="margin-left:{espaco_h}px; {estilo_texto}">' \
+                            f'{nome}</div>' \
+                            f'</div>'
+                        
+        legenda_html += '</div>'
+        mapa.get_root().html.add_child(folium.Element(legenda_html))
+
+    folium.LayerControl().add_to(mapa)
+    from folium.plugins import Fullscreen
+    Fullscreen().add_to(mapa)
+
+    return mapa
 
 if __name__ == "__main__":
     main()
