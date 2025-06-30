@@ -48,7 +48,7 @@ COLUNAS_DESEJADAS = [
     'Data', 'Hora', 'Equipamento', 'Descricao Equipamento', 'Estado', 'Estado Operacional',
     'Grupo Equipamento/Frente', 'Grupo Operacao', 'Horimetro', 'Motor Ligado', 'Operacao', 'Operador',
     'RPM Motor', 'Tipo de Equipamento', 'Velocidade', 'Parado com motor ligado',
-    'Diferença_Hora', 'Horas Produtivas', 'GPS', 'Motor Ocioso'
+    'Diferença_Hora', 'Horas Produtivas', 'GPS', 'Motor Ocioso', 'Latitude', 'Longitude'
 ]
 
 # Valores a serem filtrados
@@ -231,7 +231,9 @@ def processar_arquivo_base(caminho_arquivo):
                     df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0).astype(int)
             
             # Limpeza e organização das colunas
-            df = df.drop(columns=COLUNAS_REMOVER, errors='ignore')
+            # Para transbordos, manter Latitude e Longitude para gerar mapas
+            colunas_remover_transbordos = [col for col in COLUNAS_REMOVER if col not in ['Latitude', 'Longitude']]
+            df = df.drop(columns=colunas_remover_transbordos, errors='ignore')
             
             # Garantir que todas as colunas desejadas existam
             for col in COLUNAS_DESEJADAS:
@@ -1284,6 +1286,23 @@ def criar_excel_com_planilhas(df_base, base_calculo, disp_mecanica, eficiencia_e
     df_diesel = criar_planilha_diesel(df_base)
     df_impureza = criar_planilha_impureza(df_base)
     
+    # Criar planilha de coordenadas
+    df_coordenadas = criar_planilha_coordenadas(df_base)
+    
+    # Gerar arquivo CSV das coordenadas
+    nome_base_original = os.path.splitext(os.path.basename(caminho_saida))[0]  # Nome do arquivo Excel sem extensão
+    # Remover o sufixo "_processado" se existir para ter o nome original
+    if nome_base_original.endswith('_processado'):
+        nome_base_original = nome_base_original[:-12]  # Remove "_processado"
+    diretorio_saida_csv = os.path.dirname(caminho_saida)
+    caminho_csv_coordenadas = os.path.join(diretorio_saida_csv, f"{nome_base_original}_Coordenadas.csv")
+    
+    try:
+        df_coordenadas.to_csv(caminho_csv_coordenadas, index=False, encoding='utf-8-sig', sep=';')
+        print(f"Arquivo CSV de coordenadas gerado: {os.path.basename(caminho_csv_coordenadas)}")
+    except Exception as e:
+        print(f"Erro ao gerar arquivo CSV de coordenadas: {str(e)}")
+    
     # Calcular ofensores
     df_ofensores = calcular_ofensores(df_base)
     
@@ -1417,6 +1436,9 @@ def criar_excel_com_planilhas(df_base, base_calculo, disp_mecanica, eficiencia_e
         df_manobras_operador.to_excel(writer, sheet_name='Manobras Operador', index=False)
         df_manobras_frota.to_excel(writer, sheet_name='Manobras Frotas', index=False)
         
+        # Adicionar planilha de coordenadas
+        df_coordenadas.to_excel(writer, sheet_name='Coordenadas', index=False)
+        
         if media_velocidade is None:
             media_velocidade = pd.DataFrame(columns=['Operador', 'Velocidade Geral', 'Velocidade Carregado', 'Velocidade Vazio'])
         media_velocidade.to_excel(writer, sheet_name='Média Velocidade', index=False)
@@ -1545,6 +1567,13 @@ def criar_excel_com_planilhas(df_base, base_calculo, disp_mecanica, eficiencia_e
                 
                 # Reajustar largura das colunas
                 ajustar_largura_colunas(worksheet)
+            
+            elif sheet_name == 'Coordenadas':
+                # Formatação específica para planilha de coordenadas
+                for row in range(2, worksheet.max_row + 1):
+                    # Velocidade (coluna E)
+                    vel_cell = worksheet.cell(row=row, column=5)
+                    vel_cell.number_format = '0.00'
             
             elif sheet_name == 'Base Calculo':
                 colunas_porcentagem = ['% Parado com motor ligado', '% Utilização GPS', '% Falta de Apontamento']
@@ -2051,6 +2080,77 @@ def calcular_base_calculo(df):
             })
     
     return pd.DataFrame(resultados_base_calculo)
+
+def criar_planilha_coordenadas(df_base):
+    """
+    Cria uma planilha com coordenadas de TODAS as operações (sem filtro em Grupo Operacao),
+    ordenada por hora e por frota. Adiciona as colunas "Velocidade" e "RTK" para
+    posterior análise de deslocamento.
+    
+    Args:
+        df_base (DataFrame): DataFrame com os dados base COMPLETOS
+        
+    Returns:
+        DataFrame: DataFrame com as colunas Equipamento, Hora, Latitude, Longitude, Velocidade e RTK
+    """
+    # Verificar se as colunas necessárias existem
+    colunas_necessarias = ['Equipamento', 'Hora', 'Latitude', 'Longitude', 'Velocidade', 'RTK (Piloto Automatico)']
+    for coluna in colunas_necessarias:
+        if coluna not in df_base.columns:
+            print(f"Aviso: Coluna '{coluna}' não encontrada para criar planilha de coordenadas.")
+            # Criar um DataFrame vazio com as colunas necessárias
+            return pd.DataFrame(columns=['Equipamento', 'Hora', 'Latitude', 'Longitude', 'Velocidade', 'RTK'])
+    
+    print(f"Total de coordenadas antes dos filtros: {len(df_base)} registros")
+    
+    # Usar todos os registros (sem filtro). Copiamos as colunas desejadas.
+    colunas_saida = ['Equipamento', 'Hora', 'Latitude', 'Longitude', 'Velocidade', 'RTK (Piloto Automatico)']
+    df_coordenadas = df_base[colunas_saida].copy()
+    
+    # Garantir que as colunas sejam numéricas
+    df_coordenadas['Latitude'] = pd.to_numeric(df_coordenadas['Latitude'], errors='coerce')
+    df_coordenadas['Longitude'] = pd.to_numeric(df_coordenadas['Longitude'], errors='coerce')
+    df_coordenadas['Velocidade'] = pd.to_numeric(df_coordenadas['Velocidade'], errors='coerce')
+    df_coordenadas['RTK (Piloto Automatico)'] = pd.to_numeric(df_coordenadas['RTK (Piloto Automatico)'], errors='coerce')
+    
+    # Filtrar apenas coordenadas válidas (não zero e não nulas)
+    # MANTER este filtro pois coordenadas 0,0 são dados inválidos
+    df_coordenadas = df_coordenadas[
+        (df_coordenadas['Latitude'] != 0) & 
+        (df_coordenadas['Longitude'] != 0) &
+        (df_coordenadas['Latitude'].notna()) &
+        (df_coordenadas['Longitude'].notna())
+    ]
+    
+    print(f"Coordenadas APÓS filtro de GPS válidos: {len(df_coordenadas)} registros")
+    
+    # Criar coluna RTK com valores "Sim"/"Não" baseado nos critérios para transbordos
+    # Critério para "Sim": Velocidade > 0 AND RTK (Piloto Automatico) = 1
+    # Para transbordos não temos "Pressão de Corte", então usamos apenas velocidade e RTK
+    df_coordenadas['RTK'] = df_coordenadas.apply(
+        lambda row: 'Sim' if (
+            row['Velocidade'] > 0 and 
+            row['RTK (Piloto Automatico)'] == 1
+        ) else 'Não', 
+        axis=1
+    )
+    
+    # Selecionar apenas as colunas finais
+    colunas_finais = ['Equipamento', 'Hora', 'Latitude', 'Longitude', 'Velocidade', 'RTK']
+    df_coordenadas = df_coordenadas[colunas_finais]
+    
+    # Formatar as coordenadas como strings com ponto decimal (mantém Velocidade numérica)
+    df_coordenadas['Latitude'] = df_coordenadas['Latitude'].apply(lambda x: f"{x:.9f}" if pd.notnull(x) else '')
+    df_coordenadas['Longitude'] = df_coordenadas['Longitude'].apply(lambda x: f"{x:.9f}" if pd.notnull(x) else '')
+    
+    # Remover duplicatas completas para reduzir tamanho da planilha
+    df_coordenadas = df_coordenadas.drop_duplicates()
+    
+    print(f"Coordenadas FINAIS (sem duplicatas): {len(df_coordenadas)} registros")
+    print(f"Registros com RTK = 'Sim': {len(df_coordenadas[df_coordenadas['RTK'] == 'Sim'])} registros")
+    print(f"Registros com RTK = 'Não': {len(df_coordenadas[df_coordenadas['RTK'] == 'Não'])} registros")
+    
+    return df_coordenadas
 
 if __name__ == "__main__":
     print("="*80)

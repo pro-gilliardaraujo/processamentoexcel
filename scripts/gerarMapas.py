@@ -1891,126 +1891,158 @@ def main():
             nome_html_unificado = f"{base}_Mapa.html"
             caminho_html_unificado = os.path.join(pasta_mapas, nome_html_unificado)
             
-            # Criar mapa unificado com todas as áreas válidas
-            mapa_unificado = criar_mapa_simples(dados_clustered)
+            # Aplicar a mesma filtragem nos dados unificados para garantir consistência total
+            dados_unificados_filtrados = filtrar_areas_trabalho(dados_clustered)
+            if dados_unificados_filtrados is None or dados_unificados_filtrados.empty:
+                print(f"   ⚠️ Nenhuma área válida encontrada após filtragem - pulando grupo {idx_grupo}")
+                continue
+            
+            # Detectar se é arquivo de transbordo pelo nome
+            eh_transbordo = 'transbordo' in base.lower()
+            
+            # Criar mapa unificado com todas as áreas válidas (mesmos dados para comum e GPS)
+            mapa_unificado = criar_mapa_simples(dados_unificados_filtrados)
             if mapa_unificado:
                 mapa_unificado.save(caminho_html_unificado)
                 print(f"✅ HTML unificado gerado: {nome_html_unificado}")
-
-            # Criar mapa de uso GPS unificado (RTK verde/vermelho) - usar TODOS os dados, não apenas clusters
-            nome_html_gps = f"{base}_UsoGPS.html"
-            caminho_html_gps = os.path.join(pasta_mapas, nome_html_gps)
-            
-            mapa_gps = criar_mapa_uso_gps(dados_grupo)  # usar dados_grupo (todos os pontos) em vez de dados_clustered
-            if mapa_gps:
-                mapa_gps.save(caminho_html_gps)
-                print(f"✅ HTML uso GPS gerado: {nome_html_gps}")
                 
-                # Gerar PNG do mapa de uso GPS também
+                # Gerar PNG do mapa unificado principal
                 if CONFIG['saida']['png']:
-                    nome_png_gps = f"{base}_UsoGPS.png"
-                    caminho_png_gps = os.path.join(pasta_mapas, nome_png_gps)
+                    nome_png_principal = f"{base}_Mapa.png"
+                    caminho_png_principal = os.path.join(pasta_mapas, nome_png_principal)
                     
-                    # Altura baseada no número de clusters
-                    if len(clusters_ids) == 1:
+                    # Altura baseada no número de clusters válidos
+                    clusters_validos = len(dados_unificados_filtrados['cluster'].unique()) if 'cluster' in dados_unificados_filtrados.columns else 1
+                    if clusters_validos == 1:
                         altura_png = 1754
-                    elif len(clusters_ids) == 2:
+                    elif clusters_validos == 2:
                         altura_png = 1100
                     else:
-                        altura_png = max(600, int(1754 / len(clusters_ids)))
+                        altura_png = max(600, int(1754 / clusters_validos))
                     
-                    salvar_screenshot(caminho_html_gps, caminho_png_gps, height=altura_png)
-                    print(f"✅ PNG uso GPS gerado: {nome_png_gps}")
+                    salvar_screenshot(caminho_html_unificado, caminho_png_principal, height=altura_png)
+                    print(f"✅ PNG principal gerado: {nome_png_principal}")
+            
+            # Criar mapa de uso GPS apenas se NÃO for transbordo e tiver coluna RTK
+            if not eh_transbordo and 'RTK' in dados_grupo.columns:
+                nome_html_gps = f"{base}_UsoGPS.html"
+                caminho_html_gps = os.path.join(pasta_mapas, nome_html_gps)
+                
+                # USAR OS MESMOS DADOS FILTRADOS DO MAPA COMUM
+                mapa_gps = criar_mapa_uso_gps(dados_unificados_filtrados)
+                if mapa_gps:
+                    mapa_gps.save(caminho_html_gps)
+                    print(f"✅ HTML uso GPS gerado: {nome_html_gps}")
+                    
+                    # Gerar PNG do mapa de uso GPS também
+                    if CONFIG['saida']['png']:
+                        nome_png_gps = f"{base}_UsoGPS.png"
+                        caminho_png_gps = os.path.join(pasta_mapas, nome_png_gps)
+                        
+                        # Mesma altura do mapa comum
+                        clusters_validos = len(dados_unificados_filtrados['cluster'].unique()) if 'cluster' in dados_unificados_filtrados.columns else 1
+                        if clusters_validos == 1:
+                            altura_png = 1754
+                        elif clusters_validos == 2:
+                            altura_png = 1100
+                        else:
+                            altura_png = max(600, int(1754 / clusters_validos))
+                        
+                        salvar_screenshot(caminho_html_gps, caminho_png_gps, height=altura_png)
+                        print(f"✅ PNG uso GPS gerado: {nome_png_gps}")
+                else:
+                    print(f"⚠️ Não foi possível gerar mapa de uso GPS para {nome_html_gps}")
+            elif eh_transbordo:
+                print(f"   📍 Transbordo detectado - gerando apenas mapa normal (sem uso GPS)")
             else:
-                print(f"⚠️ Não foi possível gerar mapa de uso GPS para {nome_html_gps}")
+                print(f"   ⚠️ Coluna RTK não encontrada - gerando apenas mapa normal")
 
-            # Gerar mapas RTK separados por área (mesma lógica dos mapas normais)
-            for idx_area, cid in enumerate(clusters_ids, start=1):
-                df_area_rtk = dados_clustered[dados_clustered['cluster'] == cid].copy()
-
-                # Filtra para garantir que é área válida (não linear, tamanho mínimo, etc.)
-                df_valida_rtk = filtrar_areas_trabalho(df_area_rtk)
-                if df_valida_rtk is None or df_valida_rtk.empty:
-                    print(f"      ⚠️  Área RTK {idx_area} descartada (não atende critérios)")
-                    continue
-
-                # Criar mapa RTK individual apenas para PNG
-                mapa_rtk_individual = criar_mapa_uso_gps(df_valida_rtk)
-                if not mapa_rtk_individual:
-                    print(f"❌ Falha ao gerar mapa RTK para área {idx_area} do grupo {idx_grupo}")
-                    continue
-
-                # Nome do PNG RTK individual
-                nome_png_rtk = f"{base}_UsoGPS{idx_area}.png"
-                caminho_png_rtk = os.path.join(pasta_mapas, nome_png_rtk)
-
-                # Criar HTML temporário para gerar PNG RTK
-                nome_html_temp_rtk = f"temp_{base}_UsoGPS{idx_area}.html"
-                caminho_html_temp_rtk = os.path.join(pasta_mapas, nome_html_temp_rtk)
-                mapa_rtk_individual.save(caminho_html_temp_rtk)
-
-                # --- Saída PNG RTK
-                if CONFIG['saida']['png']:
-                    # Ajuste de altura: distribui verticalmente pelas áreas detectadas
-                    if len(clusters_ids) == 1:
-                        altura_png_rtk = 1754
-                    elif len(clusters_ids) == 2:
-                        altura_png_rtk = 1100
+            # Gerar mapas individuais por área apenas se houver múltiplas áreas
+            if len(clusters_ids) > 1:
+                # Primeiro, validar quais áreas são válidas e criar mapeamento consistente
+                areas_validas = []  # Lista de (cluster_id, df_valida)
+                
+                for cid in clusters_ids:
+                    df_area = dados_clustered[dados_clustered['cluster'] == cid].copy()
+                    
+                    # Filtra para garantir que é área válida (não linear, tamanho mínimo, etc.)
+                    df_valida = filtrar_areas_trabalho(df_area)
+                    if df_valida is not None and not df_valida.empty:
+                        areas_validas.append((cid, df_valida))
                     else:
-                        altura_png_rtk = max(600, int(1754 / len(clusters_ids)))
+                        print(f"      ⚠️  Cluster {cid} descartado (não atende critérios)")
+                
+                print(f"   • {len(areas_validas)} área(s) válidas após filtragem")
+                
+                # Gerar mapas individuais para cada área válida
+                for idx_area, (cid, df_valida) in enumerate(areas_validas, start=1):
+                    
+                    # ===== MAPA COMUM =====
+                    mapa_individual = criar_mapa_simples(df_valida)
+                    if mapa_individual:
+                        # Nome do PNG individual
+                        nome_png = f"{base}_Mapa{idx_area}.png"
+                        caminho_png = os.path.join(pasta_mapas, nome_png)
 
-                    salvar_screenshot(caminho_html_temp_rtk, caminho_png_rtk, height=altura_png_rtk)
-                    print(f"✅ PNG RTK gerado: {nome_png_rtk}")
+                        # Criar HTML temporário para gerar PNG
+                        nome_html_temp = f"temp_{base}_Mapa{idx_area}.html"
+                        caminho_html_temp = os.path.join(pasta_mapas, nome_html_temp)
+                        mapa_individual.save(caminho_html_temp)
 
-                # Remove HTML temporário RTK
-                try:
-                    os.remove(caminho_html_temp_rtk)
-                except Exception:
-                    pass
+                        # --- Saída PNG
+                        if CONFIG['saida']['png']:
+                            # Ajuste de altura baseado no número de áreas VÁLIDAS
+                            if len(areas_validas) == 1:
+                                altura_png = 1754
+                            elif len(areas_validas) == 2:
+                                altura_png = 1100
+                            else:
+                                altura_png = max(600, int(1754 / len(areas_validas)))
 
-            # Gerar PNGs separados por área
-            for idx_area, cid in enumerate(clusters_ids, start=1):
-                df_area = dados_clustered[dados_clustered['cluster'] == cid].copy()
+                            salvar_screenshot(caminho_html_temp, caminho_png, height=altura_png)
+                            print(f"✅ PNG comum gerado: {nome_png}")
 
-                # Filtra para garantir que é área válida (não linear, tamanho mínimo, etc.)
-                df_valida = filtrar_areas_trabalho(df_area)
-                if df_valida is None or df_valida.empty:
-                    print(f"      ⚠️  Área {idx_area} descartada (não atende critérios)")
-                    continue
-
-                # Criar mapa individual apenas para PNG
-                mapa_individual = criar_mapa_simples(df_valida)
-                if not mapa_individual:
-                    print(f"❌ Falha ao gerar mapa para área {idx_area} do grupo {idx_grupo}")
-                    continue
-
-                # Nome do PNG individual
-                nome_png = f"{base}_Mapa{idx_area}.png"
-                caminho_png = os.path.join(pasta_mapas, nome_png)
-
-                # Criar HTML temporário para gerar PNG
-                nome_html_temp = f"temp_{base}_Mapa{idx_area}.html"
-                caminho_html_temp = os.path.join(pasta_mapas, nome_html_temp)
-                mapa_individual.save(caminho_html_temp)
-
-                # --- Saída PNG
-                if CONFIG['saida']['png']:
-                    # Ajuste de altura: distribui verticalmente pelas áreas detectadas
-                    if len(clusters_ids) == 1:
-                        altura_png = 1754
-                    elif len(clusters_ids) == 2:
-                        altura_png = 1100
+                        # Remove HTML temporário
+                        try:
+                            os.remove(caminho_html_temp)
+                        except Exception:
+                            pass
                     else:
-                        altura_png = max(600, int(1754 / len(clusters_ids)))
+                        print(f"❌ Falha ao gerar mapa comum para área {idx_area}")
+                    
+                    # ===== MAPA GPS (apenas se não for transbordo e tiver RTK) =====
+                    if not eh_transbordo and 'RTK' in dados_grupo.columns:
+                        mapa_rtk_individual = criar_mapa_uso_gps(df_valida)
+                        if mapa_rtk_individual:
+                            # Nome do PNG RTK individual (mesma numeração da área comum)
+                            nome_png_rtk = f"{base}_UsoGPS{idx_area}.png"
+                            caminho_png_rtk = os.path.join(pasta_mapas, nome_png_rtk)
 
-                    salvar_screenshot(caminho_html_temp, caminho_png, height=altura_png)
-                    print(f"✅ PNG gerado: {nome_png}")
+                            # Criar HTML temporário para gerar PNG RTK
+                            nome_html_temp_rtk = f"temp_{base}_UsoGPS{idx_area}.html"
+                            caminho_html_temp_rtk = os.path.join(pasta_mapas, nome_html_temp_rtk)
+                            mapa_rtk_individual.save(caminho_html_temp_rtk)
 
-                # Remove HTML temporário
-                try:
-                    os.remove(caminho_html_temp)
-                except Exception:
-                    pass
+                            # --- Saída PNG RTK
+                            if CONFIG['saida']['png']:
+                                # Mesma altura do mapa comum correspondente
+                                if len(areas_validas) == 1:
+                                    altura_png_rtk = 1754
+                                elif len(areas_validas) == 2:
+                                    altura_png_rtk = 1100
+                                else:
+                                    altura_png_rtk = max(600, int(1754 / len(areas_validas)))
+
+                                salvar_screenshot(caminho_html_temp_rtk, caminho_png_rtk, height=altura_png_rtk)
+                                print(f"✅ PNG GPS gerado: {nome_png_rtk}")
+
+                            # Remove HTML temporário RTK
+                            try:
+                                os.remove(caminho_html_temp_rtk)
+                            except Exception:
+                                pass
+                        else:
+                            print(f"❌ Falha ao gerar mapa GPS para área {idx_area}")
 
     print("\n🎯 Mapas individuais prontos na pasta output/mapas")
 
