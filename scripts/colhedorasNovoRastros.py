@@ -278,12 +278,15 @@ def processar_arquivo_base(caminho_arquivo):
                 df = df.drop(columns=['Data/Hora'])
                 
                 # Conversão e cálculo de diferenças de hora
-                df['Hora'] = pd.to_datetime(df['Hora'], format='%H:%M:%S')
-                df['Diferença_Hora'] = df['Hora'].diff().dt.total_seconds() / 3600
+                df_hora_temp = pd.to_datetime(df['Hora'], format='%H:%M:%S')
+                df['Diferença_Hora'] = df_hora_temp.diff().dt.total_seconds() / 3600
                 df['Diferença_Hora'] = df['Diferença_Hora'].apply(lambda x: max(x, 0))
                 
                 # Nova regra: se Diferença_Hora > 0.50, então 0
                 df['Diferença_Hora'] = df['Diferença_Hora'].apply(lambda x: 0 if x > 0.50 else x)
+                
+                # Manter apenas a parte da hora como string no formato HH:MM:SS
+                df['Hora'] = df_hora_temp.dt.strftime('%H:%M:%S')
             
             # Cálculos adicionais
             RPM_MINIMO = 300  # Definindo constante para RPM mínimo
@@ -1072,6 +1075,125 @@ def calcular_ofensores(df):
     
     return resultado
 
+def calcular_lavagem(df):
+    """
+    Calcula os intervalos de lavagem para cada equipamento.
+    Identifica início, fim e duração de cada intervalo de lavagem,
+    e calcula o tempo total por dia e equipamento.
+    
+    Args:
+        df (DataFrame): DataFrame com os dados
+        
+    Returns:
+        DataFrame: DataFrame com os intervalos de lavagem detalhados
+    """
+    print("Calculando intervalos de lavagem...")
+    
+    # Filtrar apenas registros de lavagem
+    df_lavagem = df[df['Operacao'] == '8490 - LAVAGEM'].copy()
+    
+    if len(df_lavagem) == 0:
+        print("Nenhum registro de lavagem encontrado.")
+        return pd.DataFrame(columns=[
+            'Data', 'Equipamento', 'Intervalo', 'Início', 'Fim', 
+            'Duração (horas)', 'Tempo Total do Dia'
+        ])
+    
+    print(f"Encontrados {len(df_lavagem)} registros de lavagem.")
+    
+    # Garantir que as colunas necessárias existam
+    colunas_necessarias = ['Equipamento', 'Data', 'Hora', 'Diferença_Hora']
+    for coluna in colunas_necessarias:
+        if coluna not in df_lavagem.columns:
+            print(f"Coluna '{coluna}' não encontrada nos dados de lavagem.")
+            return pd.DataFrame(columns=[
+                'Data', 'Equipamento', 'Intervalo', 'Início', 'Fim', 
+                'Duração (horas)', 'Tempo Total do Dia'
+            ])
+    
+    # Ordenar por equipamento, data e hora
+    df_lavagem = df_lavagem.sort_values(['Equipamento', 'Data', 'Hora'])
+    
+    resultados = []
+    
+    # Agrupar por equipamento e data
+    for (equipamento, data), grupo in df_lavagem.groupby(['Equipamento', 'Data']):
+        print(f"Processando lavagem: {equipamento} - {data}")
+        
+        # Resetar índices para facilitar a iteração
+        grupo = grupo.reset_index(drop=True)
+        
+        # Identificar intervalos contínuos de lavagem
+        intervalos = []
+        inicio_intervalo = None
+        fim_intervalo = None
+        duracao_intervalo = 0
+        
+        for i in range(len(grupo)):
+            registro = grupo.iloc[i]
+            
+            # Converter hora string para datetime para comparação
+            hora_atual = pd.to_datetime(registro['Hora'], format='%H:%M:%S')
+            
+            # Se é o primeiro registro ou se houve uma pausa longa (> 30 minutos)
+            if (inicio_intervalo is None or 
+                (i > 0 and (hora_atual - pd.to_datetime(grupo.iloc[i-1]['Hora'], format='%H:%M:%S')).total_seconds() > 1800)):
+                
+                # Finalizar intervalo anterior se existir
+                if inicio_intervalo is not None:
+                    intervalos.append({
+                        'inicio': inicio_intervalo,
+                        'fim': fim_intervalo,
+                        'duracao': duracao_intervalo
+                    })
+                
+                # Iniciar novo intervalo
+                inicio_intervalo = registro['Hora']
+                duracao_intervalo = registro['Diferença_Hora']
+            else:
+                # Continuar intervalo atual
+                duracao_intervalo += registro['Diferença_Hora']
+            
+            # Atualizar fim do intervalo
+            fim_intervalo = registro['Hora']
+        
+        # Adicionar o último intervalo
+        if inicio_intervalo is not None:
+            intervalos.append({
+                'inicio': inicio_intervalo,
+                'fim': fim_intervalo,
+                'duracao': duracao_intervalo
+            })
+        
+        # Calcular tempo total do dia
+        tempo_total_dia = sum(intervalo['duracao'] for intervalo in intervalos)
+        
+        # Adicionar cada intervalo aos resultados
+        for i, intervalo in enumerate(intervalos, 1):
+            # Preencher "Tempo Total do Dia" apenas no último intervalo
+            tempo_total_mostrar = tempo_total_dia if i == len(intervalos) else None
+            
+            resultados.append({
+                'Data': data,
+                'Equipamento': equipamento,
+                'Intervalo': f"Intervalo {i}",
+                'Início': intervalo['inicio'],
+                'Fim': intervalo['fim'],
+                'Duração (horas)': intervalo['duracao'],
+                'Tempo Total do Dia': tempo_total_mostrar
+            })
+    
+    # Criar DataFrame com os resultados
+    df_resultado = pd.DataFrame(resultados)
+    
+    # Ordenar por data, equipamento e intervalo
+    if not df_resultado.empty:
+        df_resultado = df_resultado.sort_values(['Data', 'Equipamento', 'Intervalo'])
+    
+    print(f"Processamento de lavagem concluído. {len(df_resultado)} intervalos identificados.")
+    
+    return df_resultado
+
 def criar_planilha_coordenadas(df_base):
     """
     Cria uma planilha com coordenadas de TODAS as operações (sem filtro em Grupo Operacao),
@@ -1146,7 +1268,8 @@ def criar_planilha_coordenadas(df_base):
 
 def criar_excel_com_planilhas(df_base, base_calculo, disp_mecanica, eficiencia_energetica,
                             hora_elevador, motor_ocioso, uso_gps, horas_por_frota, caminho_saida,
-                            caminho_arquivo, df_duplicados=None, media_velocidade=None, df_substituicoes=None):
+                            caminho_arquivo, df_duplicados=None, media_velocidade=None, df_substituicoes=None, 
+                            df_lavagem=None, df_ofensores=None):
     """
     Cria um arquivo Excel com todas as planilhas necessárias.
     Também gera um arquivo CSV da planilha Coordenadas.
@@ -1189,10 +1312,7 @@ def criar_excel_com_planilhas(df_base, base_calculo, disp_mecanica, eficiencia_e
     except Exception as e:
         print(f"Erro ao gerar arquivo CSV de coordenadas: {str(e)}")
     
-    # Calcular ofensores
-    df_ofensores = calcular_ofensores(df_base)
-
-    # ===== CÁLCULO DE MANOBRAS (média simples) =====
+        # ===== CÁLCULO DE MANOBRAS (média simples) =====
     if {'Estado', 'Diferença_Hora'}.issubset(df_base.columns):
         # Filtrar manobras pelo tempo mínimo configurado (converter de segundos para horas)
         tempo_minimo_horas = tempoMinimoManobras / 3600
@@ -1319,7 +1439,12 @@ def criar_excel_com_planilhas(df_base, base_calculo, disp_mecanica, eficiencia_e
         df_horas_motor_total.to_excel(writer, sheet_name='Horas Motor', index=False)
         
         # Adicionar nova planilha de ofensores
-        df_ofensores.to_excel(writer, sheet_name='Ofensores', index=False)
+        if df_ofensores is not None and not df_ofensores.empty:
+            df_ofensores.to_excel(writer, sheet_name='Ofensores', index=False)
+        
+        # Adicionar planilha de lavagem
+        if df_lavagem is not None and not df_lavagem.empty:
+            df_lavagem.to_excel(writer, sheet_name='Lavagem', index=False)
         
         # Adicionar novas planilhas
         df_tdh.to_excel(writer, sheet_name='TDH', index=False)
@@ -1348,7 +1473,19 @@ def criar_excel_com_planilhas(df_base, base_calculo, disp_mecanica, eficiencia_e
             worksheet = workbook[sheet_name]
             ajustar_largura_colunas(worksheet)
             
-            if sheet_name == '1_Disponibilidade Mecânica':
+            if sheet_name == 'BASE':
+                # Formatação da planilha BASE
+                # Encontrar a coluna "Hora" e formatá-la como texto (já está no formato HH:MM:SS)
+                for col in range(1, worksheet.max_column + 1):
+                    header = worksheet.cell(row=1, column=col).value
+                    if header == 'Hora':
+                        # Formatar toda a coluna "Hora" como texto
+                        for row in range(2, worksheet.max_row + 1):
+                            cell = worksheet.cell(row=row, column=col)
+                            cell.number_format = '@'  # Formato de texto
+                        break
+            
+            elif sheet_name == '1_Disponibilidade Mecânica':
                 for row in range(2, worksheet.max_row + 1):
                     cell = worksheet.cell(row=row, column=2)  # Coluna B (Disponibilidade)
                     cell.number_format = '0.00%'
@@ -1389,14 +1526,15 @@ def criar_excel_com_planilhas(df_base, base_calculo, disp_mecanica, eficiencia_e
                         cell.number_format = '0.00'
             
             elif sheet_name == 'Ofensores':
-                for row in range(2, worksheet.max_row + 1):
-                    # Coluna B (Tempo)
-                    cell = worksheet.cell(row=row, column=2)
-                    cell.number_format = '0.00'  # Formato decimal
-                    
-                    # Coluna C (Porcentagem)
-                    cell = worksheet.cell(row=row, column=3)
-                    cell.number_format = '0.00%'  # Formato percentual
+                if df_ofensores is not None and not df_ofensores.empty:
+                    for row in range(2, worksheet.max_row + 1):
+                        # Coluna B (Tempo)
+                        cell = worksheet.cell(row=row, column=2)
+                        cell.number_format = '0.00'  # Formato decimal
+                        
+                        # Coluna C (Porcentagem)
+                        cell = worksheet.cell(row=row, column=3)
+                        cell.number_format = '0.00%'  # Formato percentual
             
             elif sheet_name == 'Horas Motor':
                 for row in range(2, worksheet.max_row + 1):
@@ -1421,6 +1559,26 @@ def criar_excel_com_planilhas(df_base, base_calculo, disp_mecanica, eficiencia_e
                 for row in range(2, worksheet.max_row + 1):
                     cell = worksheet.cell(row=row, column=2)  # Coluna B (Impureza)
                     cell.number_format = '0.00'  # 2 casas decimais
+            
+            elif sheet_name == 'Lavagem':
+                if df_lavagem is not None and not df_lavagem.empty:
+                    for row in range(2, worksheet.max_row + 1):
+                        # Coluna D (Início)
+                        cell = worksheet.cell(row=row, column=4)
+                        cell.number_format = 'hh:mm:ss'
+                        
+                        # Coluna E (Fim)
+                        cell = worksheet.cell(row=row, column=5)
+                        cell.number_format = 'hh:mm:ss'
+                        
+                        # Coluna F (Duração)
+                        cell = worksheet.cell(row=row, column=6)
+                        cell.number_format = '0.00'
+                        
+                        # Coluna G (Tempo Total do Dia) - só formatar se não for None/vazio
+                        cell = worksheet.cell(row=row, column=7)
+                        if cell.value is not None and cell.value != "":
+                            cell.number_format = '0.00'
             
             elif sheet_name == 'Coordenadas':
                 # Formatar coluna Hora como hora
@@ -1620,6 +1778,12 @@ def processar_arquivo(caminho_arquivo, diretorio_saida):
     # Calcular média de velocidade por operador
     media_velocidade = calcular_media_velocidade(df_base)
     
+    # Calcular intervalos de lavagem
+    df_lavagem = calcular_lavagem(df_base)
+    
+    # Calcular ofensores
+    df_ofensores = calcular_ofensores(df_base)
+    
     # Criar o arquivo Excel com todas as planilhas
     criar_excel_com_planilhas(
         df_base, base_calculo, disp_mecanica, eficiencia_energetica,
@@ -1627,7 +1791,9 @@ def processar_arquivo(caminho_arquivo, diretorio_saida):
         caminho_arquivo,  # Adicionar o caminho do arquivo original
         df_duplicados,  # Adicionar a tabela de IDs duplicadas
         media_velocidade,  # Adicionar a tabela de média de velocidade
-        df_substituicoes  # Adicionar a tabela de IDs substituídas
+        df_substituicoes,  # Adicionar a tabela de IDs substituídas
+        df_lavagem,  # Adicionar a tabela de intervalos de lavagem
+        df_ofensores  # Adicionar a tabela de ofensores
     )
     
     print(f"Arquivo {arquivo_saida} gerado com sucesso!")
@@ -1944,8 +2110,8 @@ def aplicar_substituicao_operadores(df, mapeamento_substituicoes, mapeamento_hor
             try:
                 if isinstance(row['Hora'], str):
                     hora_registro = datetime.strptime(row['Hora'], '%H:%M:%S').time()
-                elif isinstance(row['Hora'], datetime.time):
-                    hora_registro = row['Hora']
+                elif hasattr(row['Hora'], 'time'):
+                    hora_registro = row['Hora'].time()
                 else:
                     continue  # Pula se não conseguir converter
                 
