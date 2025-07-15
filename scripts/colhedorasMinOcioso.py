@@ -394,7 +394,7 @@ def calcular_base_calculo(df):
         # RTK - soma de Diferença_Hora onde todas as condições são atendidas (IGUAL AO ORIGINAL)
         rtk = dados_filtrados[
             (dados_filtrados['Grupo Operacao'] == 'Produtiva') &
-            (dados_filtrados['Pressao de Corte'] > 300) &
+            (dados_filtrados['Pressao de Corte'] >= 400) &
             (dados_filtrados['RTK (Piloto Automatico)'] == 1) &
             (dados_filtrados['Esteira Ligada'] == 1)
         ]['Diferença_Hora'].sum()

@@ -40,8 +40,7 @@ COLUNAS_REMOVER = [
     'Descricao Equipamento',
     'Fazenda',
     'Zona',
-    'Talhao',
-    'Estado'
+    'Talhao'
 ]
 
 COLUNAS_DESEJADAS = [
@@ -1530,110 +1529,8 @@ def criar_excel_com_planilhas(df_base, disp_mecanica, eficiencia_energetica, vel
     except Exception as e:
         print(f"Erro ao gerar arquivo CSV de coordenadas: {str(e)}")
     
-        # ===== CÁLCULO DE MANOBRAS (média simples) =====
-    if {'Estado', 'Diferença_Hora'}.issubset(df_base.columns):
-        # Filtrar manobras pelo tempo mínimo configurado (converter de segundos para horas)
-        tempo_minimo_horas = tempoMinimoManobras / 3600
-        df_manobras = df_base[(df_base['Estado'] == 'MANOBRA') & 
-                             (df_base['Diferença_Hora'] >= tempo_minimo_horas) & 
-                             (df_base['Velocidade'] >= velocidadeMinimaManobras)]
-        
-        # Mostrar informações sobre o filtro aplicado
-        total_manobras_original = len(df_base[df_base['Estado'] == 'MANOBRA'])
-        total_manobras_filtradas = len(df_manobras)
-        print(f"\nFiltros de manobras aplicados:")
-        print(f"- Tempo mínimo: {tempoMinimoManobras} segundos ({tempo_minimo_horas:.6f} horas)")
-        print(f"- Velocidade mínima: {velocidadeMinimaManobras} km/h")
-        print(f"Total de manobras antes dos filtros: {total_manobras_original}")
-        print(f"Total de manobras após os filtros: {total_manobras_filtradas}")
-        print(f"Manobras removidas: {total_manobras_original - total_manobras_filtradas} ({((total_manobras_original - total_manobras_filtradas) / total_manobras_original * 100) if total_manobras_original > 0 else 0:.2f}%)\n")
-    else:
-        df_manobras = pd.DataFrame()
-
-    if not df_manobras.empty:
-        # Operador
-        if 'Operador' in df_manobras.columns:
-            # Calcular métricas por operador
-            df_manobras_operador = df_manobras.groupby('Operador').agg({
-                'Diferença_Hora': ['count', 'mean', 'sum'],
-                'RPM Motor': 'mean',
-                'Velocidade': 'mean'
-            }).reset_index()
-            
-            # Renomear colunas
-            df_manobras_operador.columns = [
-                'Operador', 
-                'Quantidade Manobras', 
-                'Tempo Médio Manobras', 
-                'Tempo Total Manobras',
-                'RPM Médio', 
-                'Velocidade Média'
-            ]
-            
-            # Ordenar por tempo médio
-            df_manobras_operador = df_manobras_operador.sort_values('Tempo Médio Manobras', ascending=False)
-            
-            # Adicionar sufixo de frotas ao nome do operador
-            def operador_com_frotas(op):
-                frotas = sorted(df_manobras[df_manobras['Operador'] == op]['Equipamento'].astype(str).unique())
-                return f"{op} ({', '.join(frotas)})" if frotas else op
-            df_manobras_operador['Operador'] = df_manobras_operador['Operador'].apply(operador_com_frotas)
-        else:
-            df_manobras_operador = pd.DataFrame(columns=[
-                'Operador', 
-                'Quantidade Manobras', 
-                'Tempo Médio Manobras', 
-                'Tempo Total Manobras',
-                'RPM Médio', 
-                'Velocidade Média'
-            ])
-        # Frota
-        if 'Equipamento' in df_manobras.columns:
-            # Calcular métricas por frota
-            df_manobras_frota = df_manobras.groupby('Equipamento').agg({
-                'Diferença_Hora': ['count', 'mean', 'sum'],
-                'RPM Motor': 'mean',
-                'Velocidade': 'mean'
-            }).reset_index()
-            
-            # Renomear colunas
-            df_manobras_frota.columns = [
-                'Frota', 
-                'Quantidade Manobras', 
-                'Tempo Médio Manobras', 
-                'Tempo Total Manobras',
-                'RPM Médio', 
-                'Velocidade Média'
-            ]
-            
-            # Ordenar por tempo médio
-            df_manobras_frota = df_manobras_frota.sort_values('Tempo Médio Manobras', ascending=False)
-        else:
-            df_manobras_frota = pd.DataFrame(columns=[
-                'Frota', 
-                'Quantidade Manobras', 
-                'Tempo Médio Manobras', 
-                'Tempo Total Manobras',
-                'RPM Médio', 
-                'Velocidade Média'
-            ])
-    else:
-        df_manobras_operador = pd.DataFrame(columns=[
-            'Operador', 
-            'Quantidade Manobras', 
-            'Tempo Médio Manobras', 
-            'Tempo Total Manobras',
-            'RPM Médio', 
-            'Velocidade Média'
-        ])
-        df_manobras_frota = pd.DataFrame(columns=[
-            'Frota', 
-            'Quantidade Manobras', 
-            'Tempo Médio Manobras', 
-            'Tempo Total Manobras',
-            'RPM Médio', 
-            'Velocidade Média'
-        ])
+        # ===== CÁLCULO DE MANOBRAS (por intervalos sequenciais) =====
+    df_manobras_frota, df_manobras_operador = calcular_manobras_por_intervalos(df_base)
     # ===== FIM CÁLCULO DE MANOBRAS =====
     
     with pd.ExcelWriter(caminho_saida, engine='openpyxl') as writer:
@@ -1672,9 +1569,11 @@ def criar_excel_com_planilhas(df_base, disp_mecanica, eficiencia_energetica, vel
         if df_lavagem is not None and not df_lavagem.empty:
             df_lavagem.to_excel(writer, sheet_name='Lavagem', index=False)
         
-        # Planilhas de manobras
-        df_manobras_operador.to_excel(writer, sheet_name='Manobras Operador', index=False)
-        df_manobras_frota.to_excel(writer, sheet_name='Manobras Frotas', index=False)
+        # Adicionar planilhas de manobras
+        if not df_manobras_frota.empty:
+            df_manobras_frota.to_excel(writer, sheet_name='Manobras Frotas', index=False)
+        if not df_manobras_operador.empty:
+            df_manobras_operador.to_excel(writer, sheet_name='Manobras Operador', index=False)
         
         # Formatar cada planilha
         workbook = writer.book
@@ -1732,6 +1631,8 @@ def criar_excel_com_planilhas(df_base, disp_mecanica, eficiencia_energetica, vel
             elif sheet_name == 'Uso GPS':
                 for row in range(2, worksheet.max_row + 1):
                     cell = worksheet.cell(row=row, column=2)  # Coluna B (Porcentagem)
+                    cell.number_format = '0.00%'
+                    cell = worksheet.cell(row=row, column=3)  # Coluna C (Porcentagem Sem Pressão)
                     cell.number_format = '0.00%'
             
             elif sheet_name == 'Horas por Frota':
@@ -1815,74 +1716,39 @@ def criar_excel_com_planilhas(df_base, disp_mecanica, eficiencia_energetica, vel
 
 
             elif sheet_name in ['Manobras Operador', 'Manobras Frotas']:
-                # Cabeçalho da nova coluna para formato de hora
-                worksheet.cell(row=1, column=worksheet.max_column + 1).value = 'Tempo Médio (hh:mm)'
-                worksheet.cell(row=1, column=worksheet.max_column).value = 'Tempo Total (hh:mm)'
-                
-                # Formatar colunas numéricas
+                # Formatação das novas colunas de manobras por intervalos
                 for row in range(2, worksheet.max_row + 1):
-                    # Quantidade de Manobras (coluna 2)
+                    # Coluna 2: Intervalos Válidos
                     cell = worksheet.cell(row=row, column=2)
                     cell.number_format = '0'
                     
-                    # Tempo Médio (coluna 3)
-                    dec_cell = worksheet.cell(row=row, column=3)
-                    dec_cell.number_format = '0.0000'
+                    # Coluna 3: Tempo Total (horas)
+                    cell = worksheet.cell(row=row, column=3)
+                    cell.number_format = '0.0000'
                     
-                    # Tempo Total (coluna 4)
-                    total_cell = worksheet.cell(row=row, column=4)
-                    total_cell.number_format = '0.0000'
+                    # Coluna 4: Tempo Médio (horas)
+                    cell = worksheet.cell(row=row, column=4)
+                    cell.number_format = '0.0000'
+                
+                # Adicionar colunas formatadas como hh:mm:ss
+                if worksheet.max_row > 1:  # Só se houver dados
+                    # Adicionar cabeçalhos para colunas de tempo formatado
+                    worksheet.cell(row=1, column=worksheet.max_column + 1).value = 'Tempo Total (hh:mm)'
+                    worksheet.cell(row=1, column=worksheet.max_column + 1).value = 'Tempo Médio (hh:mm)'
                     
-                    # RPM Médio (coluna 5)
-                    rpm_cell = worksheet.cell(row=row, column=5)
-                    rpm_cell.number_format = '0'
-                    
-                    # Velocidade Média (coluna 6) - Sem formatação específica
-                    vel_cell = worksheet.cell(row=row, column=6)
-                    vel_cell.number_format = 'General'
-                    
-                    # Adicionar colunas com tempo formatado como horas
-                    # Tempo Médio (hh:mm)
-                    worksheet.cell(row=row, column=worksheet.max_column).value = dec_cell.value / 24 if dec_cell.value else 0
-                    worksheet.cell(row=row, column=worksheet.max_column).number_format = 'h:mm:ss'
-                    
-                    # Tempo Total (hh:mm)
-                    worksheet.cell(row=row, column=worksheet.max_column - 1).value = total_cell.value / 24 if total_cell.value else 0
-                    worksheet.cell(row=row, column=worksheet.max_column - 1).number_format = 'h:mm:ss'
+                    for row in range(2, worksheet.max_row + 1):
+                        # Tempo Total em formato hh:mm:ss
+                        tempo_total = worksheet.cell(row=row, column=3).value
+                        worksheet.cell(row=row, column=worksheet.max_column - 1).value = tempo_total / 24 if tempo_total else 0
+                        worksheet.cell(row=row, column=worksheet.max_column - 1).number_format = 'h:mm:ss'
+                        
+                        # Tempo Médio em formato hh:mm:ss
+                        tempo_medio = worksheet.cell(row=row, column=4).value
+                        worksheet.cell(row=row, column=worksheet.max_column).value = tempo_medio / 24 if tempo_medio else 0
+                        worksheet.cell(row=row, column=worksheet.max_column).number_format = 'h:mm:ss'
                 
                 # Reajustar largura das colunas
                 ajustar_largura_colunas(worksheet)
-    
-    # ===== INÍCIO: cálculo de manobras =====
-    if 'Estado' in df_base.columns and 'Diferença_Hora' in df_base.columns:
-        df_manobras = df_base[df_base['Estado'] == 'MANOBRA']
-    else:
-        df_manobras = pd.DataFrame()
-
-    # Manobras por Operador
-    if not df_manobras.empty and 'Operador' in df_manobras.columns:
-        df_manobras_operador = (
-            df_manobras.groupby('Operador')['Diferença_Hora']
-            .sum()
-            .reset_index()
-            .rename(columns={'Diferença_Hora': 'Tempo Manobras'})
-            .sort_values('Tempo Manobras', ascending=False)
-        )
-    else:
-        df_manobras_operador = pd.DataFrame(columns=['Operador', 'Tempo Manobras'])
-
-    # Manobras por Frota
-    if not df_manobras.empty and 'Equipamento' in df_manobras.columns:
-        df_manobras_frota = (
-            df_manobras.groupby('Equipamento')['Diferença_Hora']
-            .sum()
-            .reset_index()
-            .rename(columns={'Equipamento': 'Frota', 'Diferença_Hora': 'Tempo Manobras'})
-            .sort_values('Tempo Manobras', ascending=False)
-        )
-    else:
-        df_manobras_frota = pd.DataFrame(columns=['Frota', 'Tempo Manobras'])
-    # ===== FIM: cálculo de manobras =====
 
 def processar_arquivo_maquina(caminho_arquivo, diretorio_saida):
     """
@@ -2403,12 +2269,13 @@ def calcular_uso_gps_maquina(df):
     """
     Calcula o percentual de uso de GPS (RTK) por máquina (Equipamento).
     Usa Diferença_Hora para todos os cálculos.
+    Inclui comparação com e sem filtro de pressão de corte.
 
     Args:
         df (DataFrame): DataFrame processado
 
     Returns:
-        DataFrame: Colunas 'Frota' e 'Porcentagem' com o percentual de uso de GPS por máquina
+        DataFrame: Colunas 'Frota', 'Porcentagem', 'Porcentagem Sem Pressão' com o percentual de uso de GPS por máquina
     """
     resultados = []
     for equipamento in df['Equipamento'].unique():
@@ -2416,14 +2283,14 @@ def calcular_uso_gps_maquina(df):
         
         print(f"\n=== Calculando uso GPS para {equipamento} ===")
         
-        # Usar Diferença_Hora para horas produtivas (mesmos filtros das horas elevador)
+        # CÁLCULO ATUAL: Usar Diferença_Hora para horas produtivas (mesmos filtros das horas elevador)
         horas_prod = dados[
             (dados['Grupo Operacao'] == 'Produtiva') & 
             (dados['Pressao de Corte'] >= 400) &
             (dados['Velocidade'] > 0)
         ]['Diferença_Hora'].sum()
         
-        # Usar Diferença_Hora para RTK
+        # CÁLCULO ATUAL: Usar Diferença_Hora para RTK
         rtk = dados[
             (dados['Grupo Operacao'] == 'Produtiva') &
             (dados['Pressao de Corte'] >= 400) &
@@ -2433,13 +2300,34 @@ def calcular_uso_gps_maquina(df):
         
         porcentagem = rtk / horas_prod if horas_prod > 0 else 0
         
-        print(f"Horas Produtivas (Diferença_Hora): {horas_prod:.4f} h")
-        print(f"RTK (Diferença_Hora): {rtk:.4f} h")
-        print(f"% Uso GPS: {porcentagem:.4f} ({porcentagem*100:.2f}%)")
+        # NOVO CÁLCULO: SEM filtro de pressão de corte
+        horas_prod_sem_pressao = dados[
+            (dados['Grupo Operacao'] == 'Produtiva') & 
+            (dados['Velocidade'] > 0)
+        ]['Diferença_Hora'].sum()
+        
+        rtk_sem_pressao = dados[
+            (dados['Grupo Operacao'] == 'Produtiva') &
+            (dados['Velocidade'] > 0) &
+            (dados['RTK (Piloto Automatico)'] == 1)
+        ]['Diferença_Hora'].sum()
+        
+        porcentagem_sem_pressao = rtk_sem_pressao / horas_prod_sem_pressao if horas_prod_sem_pressao > 0 else 0
+        
+        print(f"CÁLCULO ATUAL (com pressão ≥ 400):")
+        print(f"  Horas Produtivas: {horas_prod:.4f} h")
+        print(f"  RTK: {rtk:.4f} h")
+        print(f"  % Uso GPS: {porcentagem:.4f} ({porcentagem*100:.2f}%)")
+        
+        print(f"CÁLCULO SEM PRESSÃO:")
+        print(f"  Horas Produtivas: {horas_prod_sem_pressao:.4f} h")
+        print(f"  RTK: {rtk_sem_pressao:.4f} h")
+        print(f"  % Uso GPS: {porcentagem_sem_pressao:.4f} ({porcentagem_sem_pressao*100:.2f}%)")
         
         resultados.append({
             'Frota': equipamento, 
-            'Porcentagem': porcentagem
+            'Porcentagem': porcentagem,
+            'Porcentagem Sem Pressão': porcentagem_sem_pressao
         })
     return pd.DataFrame(resultados)
 
@@ -2478,6 +2366,10 @@ def criar_excel_planilhas_reduzidas(df_base, disp_mecanica, eficiencia_energetic
             max_length = min(max_length, 40)
             worksheet.column_dimensions[column_letter].width = max_length
  
+    # ===== CÁLCULO DE MANOBRAS (por intervalos sequenciais) =====
+    df_manobras_frota, df_manobras_operador = calcular_manobras_por_intervalos(df_base)
+    # ===== FIM CÁLCULO DE MANOBRAS =====
+    
     with pd.ExcelWriter(caminho_saida, engine='openpyxl') as writer:
         # Planilha BASE
         df_base.to_excel(writer, sheet_name='BASE', index=False)
@@ -2500,6 +2392,12 @@ def criar_excel_planilhas_reduzidas(df_base, disp_mecanica, eficiencia_energetic
         # Ofensores (caso exista)
         if df_ofensores is not None and not df_ofensores.empty:
             df_ofensores.to_excel(writer, sheet_name='Ofensores', index=False)
+        
+        # Adicionar planilhas de manobras
+        if not df_manobras_frota.empty:
+            df_manobras_frota.to_excel(writer, sheet_name='Manobras Frotas', index=False)
+        if not df_manobras_operador.empty:
+            df_manobras_operador.to_excel(writer, sheet_name='Manobras Operador', index=False)
 
         # Ajustar largura das colunas e aplicar formatação específica
         wb = writer.book
@@ -2540,6 +2438,8 @@ def criar_excel_planilhas_reduzidas(df_base, disp_mecanica, eficiencia_energetic
                 for row in range(2, ws.max_row + 1):
                     # Coluna B (Porcentagem)
                     ws.cell(row=row, column=2).number_format = '0.00%'
+                    # Coluna C (Porcentagem Sem Pressão)
+                    ws.cell(row=row, column=3).number_format = '0.00%'
             
             elif sh_name == 'Motor Ocioso':
                 for row in range(2, ws.max_row + 1):
@@ -2581,38 +2481,34 @@ def criar_excel_planilhas_reduzidas(df_base, disp_mecanica, eficiencia_energetic
                         if cell.value is not None and cell.value != "":
                             cell.number_format = '0.00'
             
+            elif sh_name in ['Manobras Frotas', 'Manobras Operador']:
+                # Formatação das novas colunas de manobras por intervalos
+                for row in range(2, ws.max_row + 1):
+                    # Coluna 2: Intervalos Válidos
+                    ws.cell(row=row, column=2).number_format = '0'
+                    # Coluna 3: Tempo Total (horas)
+                    ws.cell(row=row, column=3).number_format = '0.0000'
+                    # Coluna 4: Tempo Médio (horas)
+                    ws.cell(row=row, column=4).number_format = '0.0000'
+                
+                # Adicionar colunas formatadas como hh:mm:ss
+                if ws.max_row > 1:  # Só se houver dados
+                    # Adicionar cabeçalhos para colunas de tempo formatado
+                    ws.cell(row=1, column=ws.max_column + 1).value = 'Tempo Total (hh:mm)'
+                    ws.cell(row=1, column=ws.max_column + 1).value = 'Tempo Médio (hh:mm)'
+                    
+                    for row in range(2, ws.max_row + 1):
+                        # Tempo Total em formato hh:mm:ss
+                        tempo_total = ws.cell(row=row, column=3).value
+                        ws.cell(row=row, column=ws.max_column - 1).value = tempo_total / 24 if tempo_total else 0
+                        ws.cell(row=row, column=ws.max_column - 1).number_format = 'h:mm:ss'
+                        
+                        # Tempo Médio em formato hh:mm:ss
+                        tempo_medio = ws.cell(row=row, column=4).value
+                        ws.cell(row=row, column=ws.max_column).value = tempo_medio / 24 if tempo_medio else 0
+                        ws.cell(row=row, column=ws.max_column).number_format = 'h:mm:ss'
+            
             _ajustar_largura_colunas(ws)
-    
-    # ===== INÍCIO: cálculo de manobras =====
-    if 'Estado' in df_base.columns and 'Diferença_Hora' in df_base.columns:
-        df_manobras = df_base[df_base['Estado'] == 'MANOBRA']
-    else:
-        df_manobras = pd.DataFrame()
-
-    # Manobras por Operador
-    if not df_manobras.empty and 'Operador' in df_manobras.columns:
-        df_manobras_operador = (
-            df_manobras.groupby('Operador')['Diferença_Hora']
-            .sum()
-            .reset_index()
-            .rename(columns={'Diferença_Hora': 'Tempo Manobras'})
-            .sort_values('Tempo Manobras', ascending=False)
-        )
-    else:
-        df_manobras_operador = pd.DataFrame(columns=['Operador', 'Tempo Manobras'])
-
-    # Manobras por Frota
-    if not df_manobras.empty and 'Equipamento' in df_manobras.columns:
-        df_manobras_frota = (
-            df_manobras.groupby('Equipamento')['Diferença_Hora']
-            .sum()
-            .reset_index()
-            .rename(columns={'Equipamento': 'Frota', 'Diferença_Hora': 'Tempo Manobras'})
-            .sort_values('Tempo Manobras', ascending=False)
-        )
-    else:
-        df_manobras_frota = pd.DataFrame(columns=['Frota', 'Tempo Manobras'])
-    # ===== FIM: cálculo de manobras =====
 
 # === NOVA FUNÇÃO: motor ocioso por máquina ===
 
@@ -2652,6 +2548,141 @@ def calcular_motor_ocioso_maquina(df: pd.DataFrame) -> pd.DataFrame:
         })
 
     return pd.DataFrame(resultados)
+
+def calcular_manobras_por_intervalos(df_base):
+    """
+    Calcula manobras por intervalos sequenciais, agrupando por frota/equipamento.
+    
+    Lógica:
+    1. Analisa registros sequencialmente (por data/hora)
+    2. Agrupa manobras consecutivas em intervalos
+    3. Interrompe intervalo se há registro NÃO-MANOBRA ≥ 30 segundos
+    4. Continua intervalo se há registro NÃO-MANOBRA < 30 segundos
+    5. Filtra intervalos pelo tempo mínimo configurado
+    6. Calcula métricas por frota: quantidade, tempo total, tempo médio
+    
+    Args:
+        df_base (DataFrame): DataFrame com os dados base
+    
+    Returns:
+        tuple: (df_manobras_frota, df_manobras_operador_vazio)
+    """
+    print(f"\n=== CALCULANDO MANOBRAS POR INTERVALOS ===")
+    print(f"Tempo mínimo por intervalo: {tempoMinimoManobras} segundos")
+    print(f"Tolerância para interrupção: 30 segundos")
+    print("="*60)
+    
+    # Converter tempo mínimo para horas
+    tempo_minimo_horas = tempoMinimoManobras / 3600
+    tolerancia_interrupcao = 30 / 3600  # 30 segundos em horas
+    
+    # Verificar se as colunas necessárias existem
+    if not {'Equipamento', 'Estado', 'Diferença_Hora'}.issubset(df_base.columns):
+        print("Colunas necessárias não encontradas para cálculo de manobras")
+        return pd.DataFrame(columns=['Frota', 'Intervalos Válidos', 'Tempo Total', 'Tempo Médio']), pd.DataFrame()
+    
+    # Ordenar por equipamento, data e hora para análise sequencial
+    colunas_ordenacao = ['Equipamento']
+    if 'Data' in df_base.columns:
+        colunas_ordenacao.append('Data')
+    if 'Hora' in df_base.columns:
+        colunas_ordenacao.append('Hora')
+    
+    df_ordenado = df_base.sort_values(colunas_ordenacao).reset_index(drop=True)
+    
+    resultados_frota = []
+    
+    # Processar cada equipamento separadamente
+    for equipamento in df_ordenado['Equipamento'].unique():
+        dados_equip = df_ordenado[df_ordenado['Equipamento'] == equipamento].reset_index(drop=True)
+        
+        print(f"\n--- Processando {equipamento} ---")
+        print(f"Total de registros: {len(dados_equip)}")
+        
+        intervalos_validos = []
+        intervalo_atual = {
+            'tempo_total': 0,
+            'inicio_idx': None,
+            'em_intervalo': False
+        }
+        
+        for idx, row in dados_equip.iterrows():
+            estado = row['Estado']
+            tempo_registro = row['Diferença_Hora']
+            
+            if estado == 'MANOBRA':
+                # Registro de manobra
+                if not intervalo_atual['em_intervalo']:
+                    # Inicia novo intervalo
+                    intervalo_atual['tempo_total'] = tempo_registro
+                    intervalo_atual['inicio_idx'] = idx
+                    intervalo_atual['em_intervalo'] = True
+                else:
+                    # Continua intervalo existente
+                    intervalo_atual['tempo_total'] += tempo_registro
+            
+            else:
+                # Registro NÃO-MANOBRA
+                if intervalo_atual['em_intervalo']:
+                    if tempo_registro >= tolerancia_interrupcao:
+                        # Interrupção >= 30 segundos: fecha o intervalo
+                        if intervalo_atual['tempo_total'] >= tempo_minimo_horas:
+                            intervalos_validos.append({
+                                'tempo_total': intervalo_atual['tempo_total'],
+                                'inicio_idx': intervalo_atual['inicio_idx'],
+                                'fim_idx': idx - 1
+                            })
+                            print(f"  Intervalo válido: {intervalo_atual['tempo_total']*3600:.1f}s (registros {intervalo_atual['inicio_idx']}-{idx-1})")
+                        else:
+                            print(f"  Intervalo descartado: {intervalo_atual['tempo_total']*3600:.1f}s < {tempoMinimoManobras}s")
+                        
+                        # Reset do intervalo
+                        intervalo_atual = {'tempo_total': 0, 'inicio_idx': None, 'em_intervalo': False}
+                    else:
+                        # Interrupção < 30 segundos: continua o intervalo (soma a pausa)
+                        intervalo_atual['tempo_total'] += tempo_registro
+                        print(f"  Pausa curta ({tempo_registro*3600:.1f}s) incluída no intervalo")
+        
+        # Processar último intervalo se ainda estiver aberto
+        if intervalo_atual['em_intervalo']:
+            if intervalo_atual['tempo_total'] >= tempo_minimo_horas:
+                intervalos_validos.append({
+                    'tempo_total': intervalo_atual['tempo_total'],
+                    'inicio_idx': intervalo_atual['inicio_idx'],
+                    'fim_idx': len(dados_equip) - 1
+                })
+                print(f"  Último intervalo válido: {intervalo_atual['tempo_total']*3600:.1f}s")
+            else:
+                print(f"  Último intervalo descartado: {intervalo_atual['tempo_total']*3600:.1f}s < {tempoMinimoManobras}s")
+        
+        # Calcular métricas para este equipamento
+        num_intervalos = len(intervalos_validos)
+        tempo_total = sum(intervalo['tempo_total'] for intervalo in intervalos_validos)
+        tempo_medio = tempo_total / num_intervalos if num_intervalos > 0 else 0
+        
+        print(f"  Resultado: {num_intervalos} intervalos válidos, {tempo_total*3600:.1f}s total, {tempo_medio*3600:.1f}s médio")
+        
+        resultados_frota.append({
+            'Frota': equipamento,
+            'Intervalos Válidos': num_intervalos,
+            'Tempo Total': tempo_total,
+            'Tempo Médio': tempo_medio
+        })
+    
+    # Criar DataFrame final ordenado por tempo total (decrescente)
+    df_manobras_frota = pd.DataFrame(resultados_frota)
+    df_manobras_frota = df_manobras_frota.sort_values('Tempo Total', ascending=False)
+    
+    # Retornar DataFrame vazio para operador (não usado neste arquivo)
+    df_manobras_operador_vazio = pd.DataFrame(columns=['Operador', 'Intervalos Válidos', 'Tempo Total', 'Tempo Médio'])
+    
+    print(f"\n=== RESUMO GERAL ===")
+    print(f"Total de equipamentos processados: {len(df_manobras_frota)}")
+    print(f"Total de intervalos válidos: {df_manobras_frota['Intervalos Válidos'].sum()}")
+    print(f"Tempo total de manobras: {df_manobras_frota['Tempo Total'].sum()*3600:.1f}s")
+    print("="*60)
+    
+    return df_manobras_frota, df_manobras_operador_vazio
 
 if __name__ == "__main__":
     print("="*80)
