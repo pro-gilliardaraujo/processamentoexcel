@@ -11,7 +11,6 @@ import math
 from sklearn.cluster import DBSCAN  # usado em funções mais abaixo (mantido)
 import numpy as np
 import colorsys
-import hashlib  # Adicionar para criar checksums
 
 # ====================================================================================
 # BLOCO DE CUSTOMIZAÇÕES (edite conforme necessidade)
@@ -153,82 +152,11 @@ def calcular_distancia(lat1, lng1, lat2, lng2):
     
     return R * c
 
-def calcular_checksum_dados(dados):
-    """Calcula checksum dos dados para detectar alterações entre execuções"""
-    if dados.empty:
-        return "empty_data"
-    
-    # Criar string representativa dos dados principais
-    coords_string = ""
-    for _, row in dados.iterrows():
-        coords_string += f"{row.get('Latitude', 0):.8f},{row.get('Longitude', 0):.8f};"
-    
-    # Calcular hash MD5
-    return hashlib.md5(coords_string.encode()).hexdigest()[:12]
-
-def garantir_ordenacao_consistente(dados):
-    """Garante ordenação consistente dos dados para evitar não-determinismo"""
-    if dados.empty:
-        return dados
-    
-    dados_copy = dados.copy()
-    
-    # Ordenar por múltiplos critérios para garantir consistência
-    colunas_ordenacao = []
-    
-    # 1. Por data/hora se disponível
-    if 'Hora' in dados_copy.columns:
-        try:
-            dados_copy['Hora'] = pd.to_datetime(dados_copy['Hora'], errors='coerce')
-            colunas_ordenacao.append('Hora')
-        except:
-            pass
-    
-    # 2. Por equipamento se disponível
-    if 'Equipamento' in dados_copy.columns:
-        colunas_ordenacao.append('Equipamento')
-    
-    # 3. Por coordenadas (sempre disponível)
-    colunas_ordenacao.extend(['Latitude', 'Longitude'])
-    
-    # Aplicar ordenação
-    try:
-        dados_copy = dados_copy.sort_values(colunas_ordenacao).reset_index(drop=True)
-        print(f"  ✅ Dados ordenados por: {colunas_ordenacao}")
-    except Exception as e:
-        print(f"  ⚠️  Erro na ordenação: {e}")
-        # Fallback: ordenar apenas por coordenadas
-        dados_copy = dados_copy.sort_values(['Latitude', 'Longitude']).reset_index(drop=True)
-    
-    return dados_copy
-
 def buscar_arquivos_csv():
     """Busca arquivos CSV com coordenadas na pasta output"""
     caminho_csv = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'output', '*.csv')
-    arquivos_brutos = glob.glob(caminho_csv)
-    
-    # Debug: mostrar arquivos encontrados antes da filtragem
-    print(f"🔍 Busca CSV em: {caminho_csv}")
-    print(f"📁 Arquivos CSV encontrados ANTES da filtragem:")
-    for i, arq in enumerate(arquivos_brutos, 1):
-        print(f"  {i}. {os.path.basename(arq)}")
-    
-    # Remover duplicatas baseado no nome do arquivo (não no caminho completo)
-    arquivos_unicos = {}
-    for arquivo in arquivos_brutos:
-        nome_base = os.path.basename(arquivo)
-        if nome_base not in arquivos_unicos:
-            arquivos_unicos[nome_base] = arquivo
-        else:
-            print(f"  ⚠️  Duplicata detectada e ignorada: {nome_base}")
-    
-    arquivos_finais = list(arquivos_unicos.values())
-    
-    print(f"📁 Arquivos CSV FINAIS (após remoção de duplicatas):")
-    for i, arq in enumerate(arquivos_finais, 1):
-        print(f"  {i}. {os.path.basename(arq)}")
-    
-    return arquivos_finais
+    arquivos = glob.glob(caminho_csv)
+    return arquivos
 
 def ler_coordenadas(arquivo):
     """Lê o arquivo CSV e retorna DataFrame com coordenadas"""
@@ -265,13 +193,6 @@ def detectar_areas_trabalho(dados_equip, eps_metros=100):
     if len(dados_equip) < 10:
         return None
     
-    # GARANTIR ORDENAÇÃO CONSISTENTE antes do clustering
-    dados_equip = garantir_ordenacao_consistente(dados_equip)
-    
-    # Calcular checksum para debug
-    checksum = calcular_checksum_dados(dados_equip)
-    print(f"  📊 Checksum dos dados: {checksum}")
-    
     # Converte coordenadas para array numpy
     coords = dados_equip[['Latitude', 'Longitude']].values
     
@@ -279,9 +200,8 @@ def detectar_areas_trabalho(dados_equip, eps_metros=100):
     # 1 grau ≈ 111km, então eps_graus = eps_metros / 111000
     eps_graus = eps_metros / 111000
     
-    # Aplica DBSCAN com parâmetros determinísticos
-    # Nota: DBSCAN é determinístico para mesmos dados na mesma ordem
-    clustering = DBSCAN(eps=eps_graus, min_samples=5, n_jobs=1).fit(coords)
+    # Aplica DBSCAN
+    clustering = DBSCAN(eps=eps_graus, min_samples=5).fit(coords)
     
     # Adiciona labels dos clusters ao dataframe
     dados_equip_copy = dados_equip.copy()
@@ -290,16 +210,8 @@ def detectar_areas_trabalho(dados_equip, eps_metros=100):
     # Filtra apenas pontos que pertencem a clusters (remove ruído)
     dados_clustered = dados_equip_copy[dados_equip_copy['cluster'] != -1]
     
-    num_clusters = len(set(clustering.labels_)) - (1 if -1 in clustering.labels_ else 0)
-    print(f"  🎯 Detectados {num_clusters} clusters (eps={eps_metros}m)")
-    print(f"  📈 Pontos em clusters: {len(dados_clustered)} de {len(dados_equip)}")
-    
-    # Debug adicional: mostrar detalhes dos clusters
-    if num_clusters > 0:
-        for cluster_id in sorted(set(clustering.labels_)):
-            if cluster_id != -1:
-                pontos_cluster = len(dados_clustered[dados_clustered['cluster'] == cluster_id])
-                print(f"     • Cluster {cluster_id}: {pontos_cluster} pontos")
+    print(f"  Detectados {len(set(clustering.labels_)) - (1 if -1 in clustering.labels_ else 0)} clusters")
+    print(f"  Pontos em clusters: {len(dados_clustered)} de {len(dados_equip)}")
     
     return dados_clustered
 
@@ -1939,48 +1851,16 @@ def main():
             print(f"⚠️ Erro ao limpar pasta: {e}")
 
     print("\n--- Gerando mapas individuais ---")
-    
-    # Debug: listar todos os arquivos que serão processados
-    print(f"\n📋 Arquivos CSV encontrados para processamento:")
-    arquivos_processados = set()  # Evitar processamento duplo
-    
-    for i, arquivo in enumerate(arquivos, 1):
-        nome_arquivo = os.path.basename(arquivo)
-        print(f"  {i}. {nome_arquivo}")
-        
-        # Verificar se já foi processado (evitar duplicação)
-        if nome_arquivo in arquivos_processados:
-            print(f"  ⚠️  ARQUIVO JÁ PROCESSADO: {nome_arquivo} - PULANDO!")
-            continue
-        
-        arquivos_processados.add(nome_arquivo)
-
-    print(f"\n🔄 Iniciando processamento de {len(arquivos)} arquivo(s)...")
 
     for arquivo in arquivos:
-        nome_arquivo = os.path.basename(arquivo)
-        
-        # Verificar novamente se já foi processado
-        if nome_arquivo not in arquivos_processados:
-            print(f"⚠️  Arquivo {nome_arquivo} não está na lista de processamento - PULANDO!")
-            continue
-        
-        print(f"\n{'='*60}")
-        print(f"🔄 PROCESSANDO: {nome_arquivo}")
-        print(f"{'='*60}")
-        
         dados = ler_coordenadas(arquivo)
         if dados is None or dados.empty:
-            print(f"⚠️  Dados vazios em {nome_arquivo}, pulando.")
+            print(f"⚠️  Dados vazios em {os.path.basename(arquivo)}, pulando.")
             continue
-
-        # Calcular checksum inicial dos dados
-        checksum_inicial = calcular_checksum_dados(dados)
-        print(f"🔑 Checksum inicial: {checksum_inicial}")
 
         # Divide em grupos geográficos se houver regiões distantes
         grupos = separar_por_distancia(dados, dist_metros=4000)
-        print(f"→ {len(grupos)} grupo(s) geográficos detectados para {nome_arquivo}")
+        print(f"→ {len(grupos)} grupo(s) geográficos detectados para {os.path.basename(arquivo)}")
 
         for idx_grupo, dados_grupo in enumerate(grupos, start=1):
 
@@ -2471,7 +2351,6 @@ def filtrar_areas_trabalho(dados: pd.DataFrame) -> pd.DataFrame | None:
 
     cfg = CONFIG.get('filtro_trabalho', {})
     if not cfg.get('ativar', True):
-        print(f"  ⚠️  Filtro de trabalho DESATIVADO - retornando todos os dados")
         return dados  # sem filtro
 
     eps = cfg.get('eps_metros', 200)
@@ -2479,65 +2358,41 @@ def filtrar_areas_trabalho(dados: pd.DataFrame) -> pd.DataFrame | None:
     min_total = cfg.get('min_total_pontos', 20)
     ratio_max = cfg.get('linear_ratio_max', 0.25)
 
-    print(f"  🔧 Parâmetros de filtragem:")
-    print(f"     • eps_metros: {eps}")
-    print(f"     • min_samples: {min_samples}")  
-    print(f"     • min_total_pontos: {min_total}")
-    print(f"     • linear_ratio_max: {ratio_max}")
-
     dados_clustered = detectar_areas_trabalho(dados, eps_metros=eps)
     if dados_clustered is None or dados_clustered.empty:
-        print(f"  ❌ Nenhum cluster detectado - retornando None")
         return None
 
     clusters_validos = []
-    clusters_descartados = []
 
     for cid in sorted(dados_clustered['cluster'].unique()):
         df_c = dados_clustered[dados_clustered['cluster'] == cid]
-        motivo_descarte = None
 
         if len(df_c) < max(min_total, min_samples):
-            motivo_descarte = f"Muito pequeno ({len(df_c)} < {max(min_total, min_samples)})"
-        else:
-            # Avaliar linearidade: relação entre menor/maior dimensão (em metros)
-            lat = df_c['Latitude'].values
-            lng = df_c['Longitude'].values
-            lat_ref = lat.mean()
-            x = (lng - lng.mean()) * 111000 * math.cos(math.radians(lat_ref))
-            y = (lat - lat.mean()) * 111000
-            width = max(x) - min(x)
-            height = max(y) - min(y)
-            menor = min(width, height)
-            maior = max(width, height) if max(width, height) else 1
-            ratio = menor / maior
+            # Muito pequeno, descarta
+            continue
 
-            if ratio < ratio_max:
-                motivo_descarte = f"Muito linear (ratio={ratio:.3f} < {ratio_max})"
+        # Avaliar linearidade: relação entre menor/maior dimensão (em metros)
+        lat = df_c['Latitude'].values
+        lng = df_c['Longitude'].values
+        lat_ref = lat.mean()
+        x = (lng - lng.mean()) * 111000 * math.cos(math.radians(lat_ref))
+        y = (lat - lat.mean()) * 111000
+        width = max(x) - min(x)
+        height = max(y) - min(y)
+        menor = min(width, height)
+        maior = max(width, height) if max(width, height) else 1
+        ratio = menor / maior
 
-        if motivo_descarte:
-            clusters_descartados.append((cid, len(df_c), motivo_descarte))
-            print(f"     ❌ Cluster {cid}: {motivo_descarte}")
-        else:
-            clusters_validos.append(df_c)
-            print(f"     ✅ Cluster {cid}: {len(df_c)} pontos - VÁLIDO")
+        if ratio < ratio_max:
+            # Muito linear, provável deslocamento → descarta
+            continue
 
-    print(f"  📊 Resultado da filtragem:")
-    print(f"     • Clusters válidos: {len(clusters_validos)}")
-    print(f"     • Clusters descartados: {len(clusters_descartados)}")
-    
-    if clusters_descartados:
-        print(f"  📝 Motivos de descarte:")
-        for cid, pontos, motivo in clusters_descartados:
-            print(f"     • Cluster {cid} ({pontos} pontos): {motivo}")
+        clusters_validos.append(df_c)
 
     if not clusters_validos:
-        print(f"  ❌ Nenhum cluster válido após filtragem - retornando None")
         return None
 
-    resultado = pd.concat(clusters_validos, ignore_index=True)
-    print(f"  ✅ Retornando {len(resultado)} pontos de {len(clusters_validos)} cluster(s) válido(s)")
-    return resultado
+    return pd.concat(clusters_validos, ignore_index=True)
 
 # ====================================================================================
 # MAPA COM CORES RTK (VERDE/VERMELHO)
