@@ -324,10 +324,12 @@ def calcular_base_calculo(df):
     Calcula médias diárias considerando os dias efetivos de trabalho de cada operador.
     
     Cálculos principais:
-    - Horas totais: soma de Diferença_Hora
-    - Horas elevador: soma de Diferença_Hora onde Esteira Ligada = 1 E Pressão de Corte > 400
-    - Motor Ligado: soma de Diferença_Hora onde Motor Ligado = 1
+    - Horas totais: CORRIGIDO - usa Diferença_Hora (tempo de apontamento)
+    - Motor Ligado: CORRIGIDO - usa horímetro inicial e final quando disponível
+    - Horas elevador: CORRIGIDO - usa horímetro inicial e final quando disponível
+    - Horas Produtivas: CORRIGIDO - usa horímetro inicial e final quando disponível
     - Parado Com Motor Ligado: MÉTODO AVANÇADO - soma da coluna Motor Ocioso, que usa o cálculo com intervalos
+    - Manutenção e outras operações: usa Diferença_Hora (tempo de apontamento)
     
     Args:
         df (DataFrame): DataFrame processado
@@ -355,6 +357,95 @@ def calcular_base_calculo(df):
             return round((numerador / denominador), precisao)
         return 0.0
     
+    def calcular_tempo_por_horimetro(dados_filtrados, condicao_filtro=None):
+        """
+        Calcula tempo baseado no horímetro inicial e final.
+        Se horímetro não estiver disponível, usa soma de Diferença_Hora como fallback.
+        
+        Args:
+            dados_filtrados: DataFrame com os dados filtrados
+            condicao_filtro: Condição adicional para filtrar os dados (opcional)
+        
+        Returns:
+            float: Tempo calculado em horas
+        """
+        # Se não há dados, retornar 0
+        if len(dados_filtrados) == 0:
+            return 0.0
+        
+        # Aplicar condição de filtro se fornecida
+        if condicao_filtro is not None:
+            dados_para_calculo = dados_filtrados[condicao_filtro]
+        else:
+            dados_para_calculo = dados_filtrados
+        
+        # Se não há dados após filtro, retornar 0
+        if len(dados_para_calculo) == 0:
+            return 0.0
+        
+        # Verificar se coluna Horimetro existe e tem dados válidos
+        if 'Horimetro' in dados_para_calculo.columns and not dados_para_calculo['Horimetro'].isna().all():
+            # Usar método do horímetro
+            try:
+                # Converter horímetro para numérico se necessário
+                horimetro_values = pd.to_numeric(dados_para_calculo['Horimetro'], errors='coerce')
+                
+                # Remover valores nulos
+                horimetro_values = horimetro_values.dropna()
+                
+                if len(horimetro_values) >= 2:
+                    # Calcular diferença entre último e primeiro horímetro
+                    horimetro_inicial = horimetro_values.iloc[0]
+                    horimetro_final = horimetro_values.iloc[-1]
+                    tempo_horimetro = horimetro_final - horimetro_inicial
+                    
+                    # Validar se o resultado é positivo e razoável
+                    if tempo_horimetro > 0 and tempo_horimetro < 24:  # Máximo 24 horas por dia
+                        print(f"Usando horímetro: {horimetro_inicial:.2f} -> {horimetro_final:.2f} = {tempo_horimetro:.4f}h")
+                        return tempo_horimetro
+                    else:
+                        print(f"Horímetro inválido ({tempo_horimetro:.4f}h), usando fallback")
+                else:
+                    print("Dados insuficientes no horímetro, usando fallback")
+            except Exception as e:
+                print(f"Erro ao processar horímetro: {e}, usando fallback")
+        
+        # Fallback: usar soma de Diferença_Hora
+        tempo_diferenca = dados_para_calculo['Diferença_Hora'].sum()
+        print(f"Usando soma de Diferença_Hora: {tempo_diferenca:.4f}h")
+        return tempo_diferenca
+    
+    def calcular_tempo_por_diferenca_hora(dados_filtrados, condicao_filtro=None):
+        """
+        Calcula tempo baseado APENAS na soma de Diferença_Hora (tempo de apontamento).
+        Usado para horas totais, manutenção e outras operações.
+        
+        Args:
+            dados_filtrados: DataFrame com os dados filtrados
+            condicao_filtro: Condição adicional para filtrar os dados (opcional)
+        
+        Returns:
+            float: Tempo calculado em horas
+        """
+        # Se não há dados, retornar 0
+        if len(dados_filtrados) == 0:
+            return 0.0
+        
+        # Aplicar condição de filtro se fornecida
+        if condicao_filtro is not None:
+            dados_para_calculo = dados_filtrados[condicao_filtro]
+        else:
+            dados_para_calculo = dados_filtrados
+        
+        # Se não há dados após filtro, retornar 0
+        if len(dados_para_calculo) == 0:
+            return 0.0
+        
+        # Sempre usar soma de Diferença_Hora
+        tempo_diferenca = dados_para_calculo['Diferença_Hora'].sum()
+        print(f"Usando tempo de apontamento (Diferença_Hora): {tempo_diferenca:.4f}h")
+        return tempo_diferenca
+    
     # Calcular as métricas para cada combinação
     for idx, row in combinacoes.iterrows():
         equipamento = row['Equipamento']
@@ -371,43 +462,49 @@ def calcular_base_calculo(df):
         # Determinar o número de dias efetivos para este operador
         dias_operador = dados_filtrados['Data'].nunique() if 'Data' in dados_filtrados.columns else 1
         
-        # Horas totais - soma de Diferença_Hora (IGUAL AO ORIGINAL)
-        horas_totais = dados_filtrados['Diferença_Hora'].sum()
+        print(f"\n=== Calculando métricas para {operador} em {equipamento} ===")
+        
+        # CORRIGIDO: Horas totais - usar Diferença_Hora (tempo de apontamento)
+        horas_totais = calcular_tempo_por_diferenca_hora(dados_filtrados)
         if dias_operador > 1:
             horas_totais = horas_totais / dias_operador
         
-        # Motor Ligado - soma de Diferença_Hora onde Motor Ligado = 1 (IGUAL AO ORIGINAL)
-        motor_ligado = dados_filtrados[
+        # Motor Ligado - usar horímetro quando disponível
+        motor_ligado = calcular_tempo_por_horimetro(
+            dados_filtrados, 
             dados_filtrados['Motor Ligado'] == 1
-        ]['Diferença_Hora'].sum()
+        )
         if dias_operador > 1:
             motor_ligado = motor_ligado / dias_operador
         
-        # Horas elevador - soma de Diferença_Hora onde Esteira Ligada = 1 E Pressão de Corte > 400 (IGUAL AO ORIGINAL)
-        horas_elevador = dados_filtrados[
+        # Horas elevador - usar horímetro quando disponível
+        horas_elevador = calcular_tempo_por_horimetro(
+            dados_filtrados,
             (dados_filtrados['Esteira Ligada'] == 1) & 
             (dados_filtrados['Pressao de Corte'] > 400)
-        ]['Diferença_Hora'].sum()
+        )
         if dias_operador > 1:
             horas_elevador = horas_elevador / dias_operador
         
         # Percentual horas elevador (em decimal 0-1)
         percent_elevador = calcular_porcentagem(horas_elevador, horas_totais)
         
-        # RTK - soma de Diferença_Hora onde todas as condições são atendidas (IGUAL AO ORIGINAL)
-        rtk = dados_filtrados[
+        # RTK - usar horímetro quando disponível
+        rtk = calcular_tempo_por_horimetro(
+            dados_filtrados,
             (dados_filtrados['Grupo Operacao'] == 'Produtiva') &
             (dados_filtrados['Pressao de Corte'] > 300) &
             (dados_filtrados['RTK (Piloto Automatico)'] == 1) &
             (dados_filtrados['Esteira Ligada'] == 1)
-        ]['Diferença_Hora'].sum()
+        )
         if dias_operador > 1:
             rtk = rtk / dias_operador
         
-        # Horas Produtivas (IGUAL AO ORIGINAL)
-        horas_produtivas = dados_filtrados[
+        # Horas Produtivas - usar horímetro quando disponível
+        horas_produtivas = calcular_tempo_por_horimetro(
+            dados_filtrados,
             dados_filtrados['Grupo Operacao'] == 'Produtiva'
-        ]['Diferença_Hora'].sum()
+        )
         if dias_operador > 1:
             horas_produtivas = horas_produtivas / dias_operador
         
@@ -427,8 +524,11 @@ def calcular_base_calculo(df):
         percent_parado_motor = calcular_porcentagem(parado_motor_ligado, motor_ligado)
         
         # Debug para verificar os valores
-        print(f"\nOperador: {operador} em {equipamento}")
-        print(f"Motor Ligado: {motor_ligado:.6f}")
+        print(f"Horas totais (apontamento): {horas_totais:.6f}")
+        print(f"Motor Ligado (horímetro): {motor_ligado:.6f}")
+        print(f"Horas elevador (horímetro): {horas_elevador:.6f}")
+        print(f"Horas Produtivas (horímetro): {horas_produtivas:.6f}")
+        print(f"RTK (horímetro): {rtk:.6f}")
         print(f"Parado com Motor Ligado (método avançado): {parado_motor_ligado:.6f}")
         print(f"% Parado com motor ligado: {percent_parado_motor:.6f}")
         
@@ -461,6 +561,9 @@ def calcular_disponibilidade_mecanica(df):
     """
     Calcula a disponibilidade mecânica para cada equipamento.
     Fórmula: (Total Geral - Manutenção) / Total Geral
+    CORRIGIDO: 
+    - Total Geral: usa Diferença_Hora (tempo de apontamento)
+    - Manutenção: usa Diferença_Hora (tempo de apontamento)
     
     Args:
         df (DataFrame): DataFrame processado
@@ -478,6 +581,28 @@ def calcular_disponibilidade_mecanica(df):
             return round((numerador / denominador), precisao)
         return 0.0
     
+    def calcular_tempo_por_diferenca_hora_equipamento(dados_equip, condicao_filtro=None):
+        """
+        Calcula tempo baseado APENAS na soma de Diferença_Hora (tempo de apontamento).
+        Usado para total geral e manutenção.
+        """
+        # Se não há dados, retornar 0
+        if len(dados_equip) == 0:
+            return 0.0
+        
+        # Aplicar condição de filtro se fornecida
+        if condicao_filtro is not None:
+            dados_para_calculo = dados_equip[condicao_filtro]
+        else:
+            dados_para_calculo = dados_equip
+        
+        # Se não há dados após filtro, retornar 0
+        if len(dados_para_calculo) == 0:
+            return 0.0
+        
+        # Sempre usar soma de Diferença_Hora
+        return dados_para_calculo['Diferença_Hora'].sum()
+    
     # Agrupar por Equipamento e calcular horas por grupo operacional
     equipamentos = df_filtrado['Equipamento'].unique()
     resultados = []
@@ -485,12 +610,16 @@ def calcular_disponibilidade_mecanica(df):
     for equipamento in equipamentos:
         dados_equip = df_filtrado[df_filtrado['Equipamento'] == equipamento]
         
-        # CORREÇÃO: Usar soma total direta, não média diária
-        # Calcular Total Geral (soma de todas as diferenças de hora)
-        total_geral = dados_equip['Diferença_Hora'].sum()
+        print(f"\n=== Calculando disponibilidade mecânica para {equipamento} ===")
         
-        # Calcular horas de manutenção (Grupo Operacao = 'Manutenção')
-        horas_manutencao = dados_equip[dados_equip['Grupo Operacao'] == 'Manutenção']['Diferença_Hora'].sum()
+        # CORREÇÃO: Usar Diferença_Hora (tempo de apontamento) para total geral
+        total_geral = calcular_tempo_por_diferenca_hora_equipamento(dados_equip)
+        
+        # CORREÇÃO: Usar Diferença_Hora (tempo de apontamento) para manutenção
+        horas_manutencao = calcular_tempo_por_diferenca_hora_equipamento(
+            dados_equip, 
+            dados_equip['Grupo Operacao'] == 'Manutenção'
+        )
         
         # CORREÇÃO: Fórmula exata como no Excel: (Total Geral - Manutenção) / Total Geral
         # A disponibilidade mecânica é: (Total - Manutenção) / Total
@@ -500,11 +629,10 @@ def calcular_disponibilidade_mecanica(df):
             disp_mecanica = 0.0
         
         # Debug: mostrar valores para verificação
-        print(f"Equipamento: {equipamento}")
-        print(f"  Total Geral: {total_geral:.6f}")
-        print(f"  Manutenção: {horas_manutencao:.6f}")
-        print(f"  Disponibilidade: {disp_mecanica:.6f} ({disp_mecanica*100:.2f}%)")
-        print(f"  Fórmula: ({total_geral:.6f} - {horas_manutencao:.6f}) / {total_geral:.6f} = {disp_mecanica:.6f}")
+        print(f"Total Geral (apontamento): {total_geral:.6f}")
+        print(f"Manutenção (apontamento): {horas_manutencao:.6f}")
+        print(f"Disponibilidade: {disp_mecanica:.6f} ({disp_mecanica*100:.2f}%)")
+        print(f"Fórmula: ({total_geral:.6f} - {horas_manutencao:.6f}) / {total_geral:.6f} = {disp_mecanica:.6f}")
         
         resultados.append({
             'Frota': equipamento,
@@ -1697,6 +1825,7 @@ def processar_arquivo_maquina(caminho_arquivo, diretorio_saida):
 
     disp_mecanica = calcular_disponibilidade_mecanica(df_base)
     df_lavagem = calcular_lavagem(df_base)
+    df_ofensores = calcular_ofensores(df_base)
     uso_gps_maquina = calcular_uso_gps_maquina(df_base)
     motor_ocioso_maquina = calcular_motor_ocioso_maquina(df_base)
 
@@ -1706,6 +1835,7 @@ def processar_arquivo_maquina(caminho_arquivo, diretorio_saida):
         uso_gps=uso_gps_maquina,
         motor_ocioso=motor_ocioso_maquina,
         df_lavagem=df_lavagem,
+        df_ofensores=df_ofensores,
         caminho_saida=arquivo_saida
     )
 
@@ -2130,6 +2260,7 @@ def aplicar_substituicao_operadores(df, mapeamento_substituicoes, mapeamento_hor
 def calcular_uso_gps_maquina(df):
     """
     Calcula o percentual de uso de GPS (RTK) por máquina (Equipamento).
+    CORRIGIDO: Usa horímetro inicial e final quando disponível.
 
     Args:
         df (DataFrame): DataFrame processado
@@ -2137,23 +2268,84 @@ def calcular_uso_gps_maquina(df):
     Returns:
         DataFrame: Colunas 'Frota' e 'Porcentagem' com o percentual de uso de GPS por máquina
     """
+    def calcular_tempo_por_horimetro_gps(dados_maq, condicao_filtro=None):
+        """
+        Calcula tempo baseado no horímetro inicial e final para cálculo de GPS.
+        Se horímetro não estiver disponível, usa soma de Diferença_Hora como fallback.
+        """
+        # Se não há dados, retornar 0
+        if len(dados_maq) == 0:
+            return 0.0
+        
+        # Aplicar condição de filtro se fornecida
+        if condicao_filtro is not None:
+            dados_para_calculo = dados_maq[condicao_filtro]
+        else:
+            dados_para_calculo = dados_maq
+        
+        # Se não há dados após filtro, retornar 0
+        if len(dados_para_calculo) == 0:
+            return 0.0
+        
+        # Verificar se coluna Horimetro existe e tem dados válidos
+        if 'Horimetro' in dados_para_calculo.columns and not dados_para_calculo['Horimetro'].isna().all():
+            # Usar método do horímetro
+            try:
+                # Converter horímetro para numérico se necessário
+                horimetro_values = pd.to_numeric(dados_para_calculo['Horimetro'], errors='coerce')
+                
+                # Remover valores nulos
+                horimetro_values = horimetro_values.dropna()
+                
+                if len(horimetro_values) >= 2:
+                    # Calcular diferença entre último e primeiro horímetro
+                    horimetro_inicial = horimetro_values.iloc[0]
+                    horimetro_final = horimetro_values.iloc[-1]
+                    tempo_horimetro = horimetro_final - horimetro_inicial
+                    
+                    # Validar se o resultado é positivo e razoável
+                    if tempo_horimetro > 0 and tempo_horimetro < 48:  # Máximo 48 horas (2 dias)
+                        return tempo_horimetro
+                    else:
+                        print(f"Horímetro inválido ({tempo_horimetro:.4f}h), usando fallback")
+                else:
+                    print("Dados insuficientes no horímetro, usando fallback")
+            except Exception as e:
+                print(f"Erro ao processar horímetro: {e}, usando fallback")
+        
+        # Fallback: usar soma de Diferença_Hora
+        return dados_para_calculo['Diferença_Hora'].sum()
+    
     resultados = []
     for equipamento in df['Equipamento'].unique():
         dados = df[df['Equipamento'] == equipamento]
-        horas_prod = dados[dados['Grupo Operacao'] == 'Produtiva']['Diferença_Hora'].sum()
-        rtk = dados[
+        
+        print(f"\n=== Calculando uso GPS para {equipamento} ===")
+        
+        # CORRIGIDO: Usar horímetro quando disponível para horas produtivas
+        horas_prod = calcular_tempo_por_horimetro_gps(dados, dados['Grupo Operacao'] == 'Produtiva')
+        
+        # CORRIGIDO: Usar horímetro quando disponível para RTK
+        rtk = calcular_tempo_por_horimetro_gps(
+            dados,
             (dados['Grupo Operacao'] == 'Produtiva') &
             (dados['Pressao de Corte'] > 300) &
             (dados['RTK (Piloto Automatico)'] == 1) &
             (dados['Esteira Ligada'] == 1)
-        ]['Diferença_Hora'].sum()
+        )
+        
         porcentagem = rtk / horas_prod if horas_prod > 0 else 0
+        
+        print(f"Horas Produtivas (horímetro): {horas_prod:.4f} h")
+        print(f"RTK (horímetro): {rtk:.4f} h")
+        print(f"% Uso GPS: {porcentagem:.4f} ({porcentagem*100:.2f}%)")
+        
         resultados.append({'Frota': equipamento, 'Porcentagem': porcentagem})
     return pd.DataFrame(resultados)
 
-def criar_excel_planilhas_reduzidas(df_base, disp_mecanica, uso_gps, motor_ocioso, df_lavagem, caminho_saida):
+def criar_excel_planilhas_reduzidas(df_base, disp_mecanica, uso_gps, motor_ocioso, df_lavagem, df_ofensores, caminho_saida):
     """
-    Gera arquivo Excel contendo somente as planilhas BASE, Lavagem, Disponibilidade Mecânica e Uso GPS por máquina.
+    Gera arquivo Excel contendo somente as planilhas BASE, Lavagem, Ofensores, Disponibilidade Mecânica e Uso GPS por máquina.
 
     Args:
         df_base (DataFrame): Dados base processados
@@ -2161,6 +2353,7 @@ def criar_excel_planilhas_reduzidas(df_base, disp_mecanica, uso_gps, motor_ocios
         uso_gps (DataFrame): Uso de GPS por máquina
         motor_ocioso (DataFrame): Motor ocioso por máquina
         df_lavagem (DataFrame): Intervalos de lavagem
+        df_ofensores (DataFrame): Top 5 ofensores gerais
         caminho_saida (str): Caminho do arquivo Excel a ser criado
     """
     def _ajustar_largura_colunas(worksheet, max_preview_rows: int = 20):
@@ -2194,6 +2387,10 @@ def criar_excel_planilhas_reduzidas(df_base, disp_mecanica, uso_gps, motor_ocios
         # Lavagem (caso exista)
         if df_lavagem is not None and not df_lavagem.empty:
             df_lavagem.to_excel(writer, sheet_name='Lavagem', index=False)
+        
+        # Ofensores (caso exista)
+        if df_ofensores is not None and not df_ofensores.empty:
+            df_ofensores.to_excel(writer, sheet_name='Ofensores', index=False)
 
         # Ajustar largura das colunas e aplicar formatação específica
         wb = writer.book
@@ -2211,13 +2408,46 @@ def criar_excel_planilhas_reduzidas(df_base, disp_mecanica, uso_gps, motor_ocios
             # Congelar a primeira linha (cabeçalho)
             ws.freeze_panes = ws['A2']
             # Formatação específica
-            if sh_name == '3_Motor Ocioso':
+            if sh_name == '1_Disponibilidade Mecânica':
+                for row in range(2, ws.max_row + 1):
+                    # Coluna B (Disponibilidade)
+                    ws.cell(row=row, column=2).number_format = '0.00%'
+            
+            elif sh_name == '2_Uso GPS':
+                for row in range(2, ws.max_row + 1):
+                    # Coluna B (Porcentagem)
+                    ws.cell(row=row, column=2).number_format = '0.00%'
+            
+            elif sh_name == '3_Motor Ocioso':
                 for row in range(2, ws.max_row + 1):
                     # Coluna B Porcentagem
                     ws.cell(row=row, column=2).number_format = '0.00%'
                     # Coluna C e D tempos
                     ws.cell(row=row, column=3).number_format = '0.00'
                     ws.cell(row=row, column=4).number_format = '0.00'
+            
+            elif sh_name == 'Ofensores':
+                if df_ofensores is not None and not df_ofensores.empty:
+                    for row in range(2, ws.max_row + 1):
+                        # Coluna B (Tempo)
+                        ws.cell(row=row, column=2).number_format = '0.00'  # Formato decimal
+                        # Coluna C (Porcentagem)
+                        ws.cell(row=row, column=3).number_format = '0.00%'  # Formato percentual
+            
+            elif sh_name == 'Lavagem':
+                if df_lavagem is not None and not df_lavagem.empty:
+                    for row in range(2, ws.max_row + 1):
+                        # Coluna D (Início)
+                        ws.cell(row=row, column=4).number_format = 'hh:mm:ss'
+                        # Coluna E (Fim)
+                        ws.cell(row=row, column=5).number_format = 'hh:mm:ss'
+                        # Coluna F (Duração)
+                        ws.cell(row=row, column=6).number_format = '0.00'
+                        # Coluna G (Tempo Total do Dia) - só formatar se não for None/vazio
+                        cell = ws.cell(row=row, column=7)
+                        if cell.value is not None and cell.value != "":
+                            cell.number_format = '0.00'
+            
             _ajustar_largura_colunas(ws)
     
     # ===== INÍCIO: cálculo de manobras =====
@@ -2259,21 +2489,75 @@ def calcular_motor_ocioso_maquina(df: pd.DataFrame) -> pd.DataFrame:
     A coluna `Motor Ocioso` deve estar presente no DataFrame (calculada por
     `calcular_motor_ocioso_novo`). O cálculo é baseado em:
 
-    tempo_ligado  = soma de `Diferença_Hora` onde `Motor Ligado == 1`
+    tempo_ligado  = CORRIGIDO: usa horímetro inicial e final onde Motor Ligado == 1
     tempo_ocioso  = soma de `Motor Ocioso`
     porcentagem   = tempo_ocioso / tempo_ligado
     """
+    def calcular_tempo_por_horimetro_maquina(dados_maq, condicao_filtro=None):
+        """
+        Calcula tempo baseado no horímetro inicial e final para uma máquina.
+        Se horímetro não estiver disponível, usa soma de Diferença_Hora como fallback.
+        """
+        # Se não há dados, retornar 0
+        if len(dados_maq) == 0:
+            return 0.0
+        
+        # Aplicar condição de filtro se fornecida
+        if condicao_filtro is not None:
+            dados_para_calculo = dados_maq[condicao_filtro]
+        else:
+            dados_para_calculo = dados_maq
+        
+        # Se não há dados após filtro, retornar 0
+        if len(dados_para_calculo) == 0:
+            return 0.0
+        
+        # Verificar se coluna Horimetro existe e tem dados válidos
+        if 'Horimetro' in dados_para_calculo.columns and not dados_para_calculo['Horimetro'].isna().all():
+            # Usar método do horímetro
+            try:
+                # Converter horímetro para numérico se necessário
+                horimetro_values = pd.to_numeric(dados_para_calculo['Horimetro'], errors='coerce')
+                
+                # Remover valores nulos
+                horimetro_values = horimetro_values.dropna()
+                
+                if len(horimetro_values) >= 2:
+                    # Calcular diferença entre último e primeiro horímetro
+                    horimetro_inicial = horimetro_values.iloc[0]
+                    horimetro_final = horimetro_values.iloc[-1]
+                    tempo_horimetro = horimetro_final - horimetro_inicial
+                    
+                    # Validar se o resultado é positivo e razoável
+                    if tempo_horimetro > 0 and tempo_horimetro < 48:  # Máximo 48 horas (2 dias)
+                        return tempo_horimetro
+                    else:
+                        print(f"Horímetro inválido ({tempo_horimetro:.4f}h), usando fallback")
+                else:
+                    print("Dados insuficientes no horímetro, usando fallback")
+            except Exception as e:
+                print(f"Erro ao processar horímetro: {e}, usando fallback")
+        
+        # Fallback: usar soma de Diferença_Hora
+        return dados_para_calculo['Diferença_Hora'].sum()
+    
     resultados = []
     for equipamento in df['Equipamento'].unique():
         dados = df[df['Equipamento'] == equipamento]
-        tempo_ligado = dados[dados['Motor Ligado'] == 1]['Diferença_Hora'].sum()
+        
+        print(f"\n=== Calculando motor ocioso para {equipamento} ===")
+        
+        # CORRIGIDO: Usar horímetro quando disponível para tempo ligado
+        tempo_ligado = calcular_tempo_por_horimetro_maquina(dados, dados['Motor Ligado'] == 1)
+        
+        # Tempo ocioso continua sendo a soma da coluna Motor Ocioso (método avançado)
         tempo_ocioso = dados['Motor Ocioso'].sum()
+        
         porcentagem = tempo_ocioso / tempo_ligado if tempo_ligado > 0 else 0
 
-        print(f"\nFrota: {equipamento}")
-        print(f"Tempo Ligado  : {tempo_ligado:.4f} h")
-        print(f"Tempo Ocioso : {tempo_ocioso:.4f} h")
-        print(f"% Ocioso     : {porcentagem:.4f} ({porcentagem*100:.2f}%)")
+        print(f"Tempo Ligado (horímetro): {tempo_ligado:.4f} h")
+        print(f"Tempo Ocioso (método avançado): {tempo_ocioso:.4f} h")
+        print(f"% Ocioso: {porcentagem:.4f} ({porcentagem*100:.2f}%)")
 
         resultados.append({
             'Frota': equipamento,
