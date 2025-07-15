@@ -285,18 +285,12 @@ def processar_arquivo_base(caminho_arquivo):
                 (df_motor_ocioso['RPM Motor'] >= RPM_MINIMO)
             ).astype(int)
             
-            # Removido cálculo de Motor Ocioso (não é mais necessário)
-            # df = calcular_motor_ocioso_novo(df)
-            if 'Motor Ocioso' in df.columns:
-                df = df.drop(columns=['Motor Ocioso'])
+            # Recalcula Motor Ocioso usando nova regra
+            df = calcular_motor_ocioso_novo(df)
             
-            # Remover completamente quaisquer colunas de Horas Produtivas caso existam
+            # Horas Produtivas não são mais utilizadas neste fluxo; remover se existir
             if 'Horas Produtivas' in df.columns:
                 df = df.drop(columns=['Horas Produtivas'])
-            
-            # IMPORTANTE: Zerar horas produtivas dos operadores excluídos para garantir que não sejam contabilizadas
-            df.loc[df['Operador'].isin(OPERADORES_EXCLUIR), 'Horas Produtivas'] = 0
-            print(f"Total de horas produtivas após exclusão de operadores: {df['Horas Produtivas'].sum():.2f}")
             
             # Limpeza e organização das colunas
             df = df.drop(columns=COLUNAS_REMOVER, errors='ignore')
@@ -1704,11 +1698,13 @@ def processar_arquivo_maquina(caminho_arquivo, diretorio_saida):
     disp_mecanica = calcular_disponibilidade_mecanica(df_base)
     df_lavagem = calcular_lavagem(df_base)
     uso_gps_maquina = calcular_uso_gps_maquina(df_base)
+    motor_ocioso_maquina = calcular_motor_ocioso_maquina(df_base)
 
     criar_excel_planilhas_reduzidas(
         df_base=df_base,
         disp_mecanica=disp_mecanica,
         uso_gps=uso_gps_maquina,
+        motor_ocioso=motor_ocioso_maquina,
         df_lavagem=df_lavagem,
         caminho_saida=arquivo_saida
     )
@@ -2155,7 +2151,7 @@ def calcular_uso_gps_maquina(df):
         resultados.append({'Frota': equipamento, 'Porcentagem': porcentagem})
     return pd.DataFrame(resultados)
 
-def criar_excel_planilhas_reduzidas(df_base, disp_mecanica, uso_gps, df_lavagem, caminho_saida):
+def criar_excel_planilhas_reduzidas(df_base, disp_mecanica, uso_gps, motor_ocioso, df_lavagem, caminho_saida):
     """
     Gera arquivo Excel contendo somente as planilhas BASE, Lavagem, Disponibilidade Mecânica e Uso GPS por máquina.
 
@@ -2163,6 +2159,7 @@ def criar_excel_planilhas_reduzidas(df_base, disp_mecanica, uso_gps, df_lavagem,
         df_base (DataFrame): Dados base processados
         disp_mecanica (DataFrame): Disponibilidade mecânica por máquina
         uso_gps (DataFrame): Uso de GPS por máquina
+        motor_ocioso (DataFrame): Motor ocioso por máquina
         df_lavagem (DataFrame): Intervalos de lavagem
         caminho_saida (str): Caminho do arquivo Excel a ser criado
     """
@@ -2192,6 +2189,8 @@ def criar_excel_planilhas_reduzidas(df_base, disp_mecanica, uso_gps, df_lavagem,
         disp_mecanica.to_excel(writer, sheet_name='1_Disponibilidade Mecânica', index=False)
         # Uso GPS por máquina
         uso_gps.to_excel(writer, sheet_name='2_Uso GPS', index=False)
+        # Motor Ocioso por máquina
+        motor_ocioso.to_excel(writer, sheet_name='3_Motor Ocioso', index=False)
         # Lavagem (caso exista)
         if df_lavagem is not None and not df_lavagem.empty:
             df_lavagem.to_excel(writer, sheet_name='Lavagem', index=False)
@@ -2209,6 +2208,81 @@ def criar_excel_planilhas_reduzidas(df_base, disp_mecanica, uso_gps, df_lavagem,
                             ws.cell(row=row, column=col).number_format = 'h:mm:ss'
                         break
             _ajustar_largura_colunas(ws)
+            # Congelar a primeira linha (cabeçalho)
+            ws.freeze_panes = ws['A2']
+            # Formatação específica
+            if sh_name == '3_Motor Ocioso':
+                for row in range(2, ws.max_row + 1):
+                    # Coluna B Porcentagem
+                    ws.cell(row=row, column=2).number_format = '0.00%'
+                    # Coluna C e D tempos
+                    ws.cell(row=row, column=3).number_format = '0.00'
+                    ws.cell(row=row, column=4).number_format = '0.00'
+            _ajustar_largura_colunas(ws)
+    
+    # ===== INÍCIO: cálculo de manobras =====
+    if 'Estado' in df_base.columns and 'Diferença_Hora' in df_base.columns:
+        df_manobras = df_base[df_base['Estado'] == 'MANOBRA']
+    else:
+        df_manobras = pd.DataFrame()
+
+    # Manobras por Operador
+    if not df_manobras.empty and 'Operador' in df_manobras.columns:
+        df_manobras_operador = (
+            df_manobras.groupby('Operador')['Diferença_Hora']
+            .sum()
+            .reset_index()
+            .rename(columns={'Diferença_Hora': 'Tempo Manobras'})
+            .sort_values('Tempo Manobras', ascending=False)
+        )
+    else:
+        df_manobras_operador = pd.DataFrame(columns=['Operador', 'Tempo Manobras'])
+
+    # Manobras por Frota
+    if not df_manobras.empty and 'Equipamento' in df_manobras.columns:
+        df_manobras_frota = (
+            df_manobras.groupby('Equipamento')['Diferença_Hora']
+            .sum()
+            .reset_index()
+            .rename(columns={'Equipamento': 'Frota', 'Diferença_Hora': 'Tempo Manobras'})
+            .sort_values('Tempo Manobras', ascending=False)
+        )
+    else:
+        df_manobras_frota = pd.DataFrame(columns=['Frota', 'Tempo Manobras'])
+    # ===== FIM: cálculo de manobras =====
+
+# === NOVA FUNÇÃO: motor ocioso por máquina ===
+
+def calcular_motor_ocioso_maquina(df: pd.DataFrame) -> pd.DataFrame:
+    """Calcula o percentual de motor ocioso por máquina.
+
+    A coluna `Motor Ocioso` deve estar presente no DataFrame (calculada por
+    `calcular_motor_ocioso_novo`). O cálculo é baseado em:
+
+    tempo_ligado  = soma de `Diferença_Hora` onde `Motor Ligado == 1`
+    tempo_ocioso  = soma de `Motor Ocioso`
+    porcentagem   = tempo_ocioso / tempo_ligado
+    """
+    resultados = []
+    for equipamento in df['Equipamento'].unique():
+        dados = df[df['Equipamento'] == equipamento]
+        tempo_ligado = dados[dados['Motor Ligado'] == 1]['Diferença_Hora'].sum()
+        tempo_ocioso = dados['Motor Ocioso'].sum()
+        porcentagem = tempo_ocioso / tempo_ligado if tempo_ligado > 0 else 0
+
+        print(f"\nFrota: {equipamento}")
+        print(f"Tempo Ligado  : {tempo_ligado:.4f} h")
+        print(f"Tempo Ocioso : {tempo_ocioso:.4f} h")
+        print(f"% Ocioso     : {porcentagem:.4f} ({porcentagem*100:.2f}%)")
+
+        resultados.append({
+            'Frota': equipamento,
+            'Porcentagem': porcentagem,
+            'Tempo Ligado': tempo_ligado,
+            'Tempo Ocioso': tempo_ocioso
+        })
+
+    return pd.DataFrame(resultados)
 
 if __name__ == "__main__":
     print("="*80)
