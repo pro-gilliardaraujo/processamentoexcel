@@ -580,9 +580,7 @@ def calcular_base_calculo(df):
     # Criar DataFrame com os resultados
     base_calculo = pd.DataFrame(resultados)
     
-    # Adicionar coluna Frente extraída
-    if not base_calculo.empty:
-        base_calculo['Frente'] = base_calculo['Grupo Equipamento/Frente'].apply(extrair_frente)
+    # Coluna Frente não necessária neste fluxo; removida para evitar erro
     
     return base_calculo
 
@@ -1475,7 +1473,7 @@ def criar_excel_com_planilhas(df_base, disp_mecanica, eficiencia_energetica, vel
         # Planilhas principais
         disp_mecanica.to_excel(writer, sheet_name='Disponibilidade Mecânica', index=False)
         eficiencia_energetica.to_excel(writer, sheet_name='Eficiência Energética', index=False)
-        velocidade_media_produtiva.to_excel(writer, sheet_name='Velocidade Média Produtiva', index=False)
+        velocidade_media_produtiva.to_excel(writer, sheet_name='Média Velocidade', index=False)
         if hora_elevador is not None and not hora_elevador.empty:
             hora_elevador.to_excel(writer, sheet_name='Hora Elevador', index=False)
         uso_gps.to_excel(writer, sheet_name='Uso GPS', index=False)
@@ -1546,7 +1544,7 @@ def criar_excel_com_planilhas(df_base, disp_mecanica, eficiencia_energetica, vel
                     cell = worksheet.cell(row=row, column=4)
                     cell.number_format = '0.00%'
             
-            elif sheet_name == 'Velocidade Média Produtiva':
+            elif sheet_name == 'Média Velocidade':
                 for row in range(2, worksheet.max_row + 1):
                     # Coluna B (Velocidade Média Produtiva)
                     cell = worksheet.cell(row=row, column=2)
@@ -1717,8 +1715,18 @@ def processar_arquivo_maquina(caminho_arquivo, diretorio_saida):
         df_base.insert(idx_diff + 1, 'Diferença_Hora_hhmm', df_base['Diferença_Hora'] / 24)
 
     disp_mecanica = calcular_disponibilidade_mecanica(df_base)
-    # Para transbordos: usar média de velocidade carregado/vazio, sem lavagem ou hora elevador
+
+    # Base Calculo para métricas agregadas
+    base_calculo = calcular_base_calculo(df_base)
+
+    # Métricas específicas
+    eficiencia_energetica = calcular_eficiencia_energetica(base_calculo)
+    falta_apontamento = calcular_falta_apontamento(base_calculo)
+    uso_gps = calcular_uso_gps(df_base, base_calculo)
+
+    # Velocidade (Geral/Carregado/Vazio)
     media_velocidade = calcular_media_velocidade(df_base)
+
     df_lavagem = None  # Não aplicável
     df_ofensores = calcular_ofensores(df_base)
     df_intervalos = calcular_intervalos_operacionais(df_base)
@@ -2322,7 +2330,7 @@ def criar_excel_planilhas_reduzidas(df_base, disp_mecanica, velocidade_media_pro
         # Disponibilidade Mecânica
         disp_mecanica.to_excel(writer, sheet_name='Disponibilidade Mecânica', index=False)
         # Velocidade Média Produtiva
-        velocidade_media_produtiva.to_excel(writer, sheet_name='Velocidade Média Produtiva', index=False)
+        velocidade_media_produtiva.to_excel(writer, sheet_name='Média Velocidade', index=False)
         # Uso GPS por máquina
         uso_gps.to_excel(writer, sheet_name='Uso GPS', index=False)
         # Motor Ocioso por máquina
@@ -2376,7 +2384,7 @@ def criar_excel_planilhas_reduzidas(df_base, disp_mecanica, velocidade_media_pro
                     # Coluna B (Disponibilidade)
                     ws.cell(row=row, column=2).number_format = '0.00%'
             
-            elif sh_name == 'Velocidade Média Produtiva':
+            elif sh_name == 'Média Velocidade':
                 for row in range(2, ws.max_row + 1):
                     # Coluna B (Velocidade Média Produtiva)
                     ws.cell(row=row, column=2).number_format = '0.00'
@@ -2939,40 +2947,70 @@ def calcular_manobras_por_intervalos(df_base):
     return df_manobras_frota, df_manobras_operador_vazio
 
 def calcular_media_velocidade(df: pd.DataFrame) -> pd.DataFrame:
-    """Calcula média de velocidade geral, carregado e vazio por operador.
-
-    Retorna DataFrame com colunas Operador, Velocidade Geral, Velocidade Carregado, Velocidade Vazio.
-    """
-    if 'Operador' not in df.columns or 'Velocidade' not in df.columns:
-        return pd.DataFrame(columns=['Operador', 'Velocidade Geral', 'Velocidade Carregado', 'Velocidade Vazio'])
+    """Calcula velocidades média (geral, carregado e vazio) por frota (Equipamento)."""
+    if 'Equipamento' not in df.columns or 'Velocidade' not in df.columns:
+        return pd.DataFrame(columns=['Frota', 'Velocidade Geral', 'Velocidade Carregado', 'Velocidade Vazio'])
 
     estado_carregado = 'DESLOCAMENTO CARREGADO'
     estado_vazio = 'DESLOCAMENTO VAZIO'
 
     df_validos = df[df['Velocidade'] > 0].copy()
 
-    # Média geral
-    media_geral = df_validos.groupby('Operador')['Velocidade'].mean()
-
-    # Média carregado
-    media_carregado = df_validos[df_validos['Estado Operacional'] == estado_carregado] \
-        .groupby('Operador')['Velocidade'].mean()
-
-    # Média vazio
-    media_vazio = df_validos[df_validos['Estado Operacional'] == estado_vazio] \
-        .groupby('Operador')['Velocidade'].mean()
-
-    operadores = df['Operador'].unique()
-    dados = []
-    for op in operadores:
-        dados.append({
-            'Operador': op,
-            'Velocidade Geral': round(media_geral.get(op, 0), 2),
-            'Velocidade Carregado': round(media_carregado.get(op, 0), 2),
-            'Velocidade Vazio': round(media_vazio.get(op, 0), 2)
+    resultados = []
+    for frota, grupo in df_validos.groupby('Equipamento'):
+        vel_geral = grupo['Velocidade'].mean()
+        vel_carregado = grupo[grupo['Estado Operacional'] == estado_carregado]['Velocidade'].mean()
+        vel_vazio = grupo[grupo['Estado Operacional'] == estado_vazio]['Velocidade'].mean()
+        resultados.append({
+            'Frota': frota,
+            'Velocidade Geral': round(vel_geral if not np.isnan(vel_geral) else 0, 2),
+            'Velocidade Carregado': round(vel_carregado if not np.isnan(vel_carregado) else 0, 2),
+            'Velocidade Vazio': round(vel_vazio if not np.isnan(vel_vazio) else 0, 2),
         })
 
-    return pd.DataFrame(dados)
+    return pd.DataFrame(resultados).sort_values('Frota')
+
+# ===============================================================
+# NOVAS FUNÇÕES: Falta de Apontamento e Eficiência Energética
+# (adaptadas de transbordosMinOcioso.py)
+# ===============================================================
+
+def calcular_falta_apontamento(base_calculo: pd.DataFrame) -> pd.DataFrame:
+    """Retorna % Falta de Apontamento agregado por operador."""
+    colunas_necessarias = ['Operador', '% Falta de Apontamento']
+    if not all(col in base_calculo.columns for col in colunas_necessarias):
+        return pd.DataFrame(columns=['Operador', 'Porcentagem'])
+
+    col_frota = 'Equipamento' if 'Equipamento' in base_calculo.columns else 'Frota'
+    agrup = base_calculo.groupby('Operador')['% Falta de Apontamento'].mean().reset_index()
+    agrup.rename(columns={'% Falta de Apontamento': 'Porcentagem'}, inplace=True)
+
+    resultados = []
+    for _, row in agrup.iterrows():
+        op = row['Operador']
+        frotas = sorted(base_calculo[base_calculo['Operador'] == op][col_frota].astype(str).unique())
+        resultados.append({'Operador': f"{op} ({', '.join(frotas)})" if frotas else op,
+                           'Porcentagem': row['Porcentagem']})
+    return pd.DataFrame(resultados)
+
+
+def calcular_eficiencia_energetica(base_calculo: pd.DataFrame) -> pd.DataFrame:
+    """Retorna eficiência energética (Horas Produtivas / Horas totais) por operador."""
+    colunas_necessarias = ['Operador', 'Horas Produtivas', 'Horas totais']
+    if not all(col in base_calculo.columns for col in colunas_necessarias):
+        return pd.DataFrame(columns=['Operador', 'Eficiência'])
+
+    col_frota = 'Equipamento' if 'Equipamento' in base_calculo.columns else 'Frota'
+    agrup = base_calculo[colunas_necessarias].groupby('Operador').sum().reset_index()
+    agrup['Eficiência'] = agrup.apply(lambda r: r['Horas Produtivas'] / r['Horas totais'] if r['Horas totais'] > 0 else 0, axis=1)
+
+    resultados = []
+    for _, row in agrup.iterrows():
+        op = row['Operador']
+        frotas = sorted(base_calculo[base_calculo['Operador'] == op][col_frota].astype(str).unique())
+        resultados.append({'Operador': f"{op} ({', '.join(frotas)})" if frotas else op,
+                           'Eficiência': row['Eficiência']})
+    return pd.DataFrame(resultados)
 
 if __name__ == "__main__":
     print("="*80)
