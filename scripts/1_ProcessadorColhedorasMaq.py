@@ -1794,7 +1794,7 @@ def processar_arquivo_maquina(caminho_arquivo, diretorio_saida):
     # Gerar gráfico de linha do tempo operacional
     try:
         import importlib.util, pathlib
-        visual_path = os.path.join(os.path.dirname(__file__), '2_GerarVisualizacaoRelatorios.py')
+        visual_path = os.path.join(os.path.dirname(__file__), '3_GerarVisualizacaoRelatorios.py')
         spec = importlib.util.spec_from_file_location('vis_op', visual_path)
         vis_module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(vis_module)  # type: ignore
