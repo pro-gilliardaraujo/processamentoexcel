@@ -1878,115 +1878,80 @@ def extrair_arquivo_zip(caminho_zip, pasta_destino=None):
         return [], None
 
 def processar_todos_arquivos():
+    """Processa todos os arquivos de TRANSBORDO (TXT/CSV/ZIP) na pasta dados.
+
+    Aceita padrões:
+      - "RV Transbordo*.txt|csv|zip"
+      - "*transbordo*.txt|csv|zip"
+      - "frente*transbordos*.txt|csv|zip"
+    Ignora QUALQUER arquivo que contenha "colhedora" no nome.
     """
-    Processa todos os arquivos TXT, CSV ou ZIP de colhedoras na pasta dados.
-    Ignora arquivos que contenham "transbordo" no nome.
-    """
-    print("\nIniciando processamento de arquivos...")
-    
-    # Obter o diretório onde está o script
+    print("\nIniciando processamento de arquivos de TRANSBORDO...")
+
     diretorio_script = os.path.dirname(os.path.abspath(__file__))
-    print(f"Diretório do script: {diretorio_script}")
-    
-    # Diretório raiz do projeto
     diretorio_raiz = os.path.dirname(diretorio_script)
-    print(f"Diretório raiz: {diretorio_raiz}")
-    
-    # Diretórios para dados de entrada e saída
     diretorio_dados = os.path.join(diretorio_raiz, "dados")
     diretorio_saida = os.path.join(diretorio_raiz, "output")
-    print(f"Diretório de dados: {diretorio_dados}")
-    print(f"Diretório de saída: {diretorio_saida}")
-    
-    # Verificar se os diretórios existem, caso contrário criar
-    if not os.path.exists(diretorio_dados):
-        print(f"Criando diretório de dados: {diretorio_dados}")
-        os.makedirs(diretorio_dados)
-    if not os.path.exists(diretorio_saida):
-        print(f"Criando diretório de saída: {diretorio_saida}")
-        os.makedirs(diretorio_saida)
-    
-    # Encontrar todos os arquivos TXT/CSV/ZIP de colhedoras
+
+    os.makedirs(diretorio_dados, exist_ok=True)
+    os.makedirs(diretorio_saida, exist_ok=True)
+
     arquivos = []
     arquivos_zip = []
-    
-    # Adicionar arquivos TXT sempre
-    arquivos += glob.glob(os.path.join(diretorio_dados, "RV Colhedora*.txt"))
-    arquivos += glob.glob(os.path.join(diretorio_dados, "*colhedora*.txt"))
-    arquivos += glob.glob(os.path.join(diretorio_dados, "colhedora*.txt"))
-    
-    # Adicionar arquivos CSV apenas se processCsv for True
+
+    # Padrões de transbordo
+    padroes_txt = ["RV Transbordo*.txt", "*transbordo*.txt", "frente*transbordos*.txt", "transbordo*.txt"]
+    padroes_csv = [p.replace(".txt", ".csv") for p in padroes_txt]
+    padroes_zip = [p.replace(".txt", ".zip") for p in padroes_txt]
+
+    for padrao in padroes_txt:
+        arquivos.extend(glob.glob(os.path.join(diretorio_dados, padrao)))
+
     if processCsv:
-        arquivos += glob.glob(os.path.join(diretorio_dados, "RV Colhedora*.csv"))
-        arquivos += glob.glob(os.path.join(diretorio_dados, "*colhedora*.csv"))
-        arquivos += glob.glob(os.path.join(diretorio_dados, "colhedora*.csv"))
-    
-    # Adicionar arquivos ZIP
-    arquivos_zip += glob.glob(os.path.join(diretorio_dados, "RV Colhedora*.zip"))
-    arquivos_zip += glob.glob(os.path.join(diretorio_dados, "*colhedora*.zip"))
-    arquivos_zip += glob.glob(os.path.join(diretorio_dados, "colhedora*.zip"))
-    
-    print("\nArquivos encontrados antes da filtragem:")
-    print(f"TXT/CSV: {[os.path.basename(a) for a in arquivos]}")
-    print(f"ZIP: {[os.path.basename(a) for a in arquivos_zip]}")
-    
-    # Filtrar arquivos que contenham "transbordo" no nome (case insensitive)
-    arquivos = [arquivo for arquivo in arquivos if "transbordo" not in os.path.basename(arquivo).lower()]
-    arquivos_zip = [arquivo for arquivo in arquivos_zip if "transbordo" not in os.path.basename(arquivo).lower()]
-    
-    # Remover possíveis duplicatas
+        for padrao in padroes_csv:
+            arquivos.extend(glob.glob(os.path.join(diretorio_dados, padrao)))
+
+    for padrao in padroes_zip:
+        arquivos_zip.extend(glob.glob(os.path.join(diretorio_dados, padrao)))
+
+    # Remover arquivos que contenham "colhedora" no nome
+    arquivos = [a for a in arquivos if "colhedora" not in os.path.basename(a).lower()]
+    arquivos_zip = [a for a in arquivos_zip if "colhedora" not in os.path.basename(a).lower()]
+
+    # Dedup
     arquivos = list(set(arquivos))
     arquivos_zip = list(set(arquivos_zip))
-    
-    print("\nArquivos encontrados após a filtragem:")
-    print(f"TXT/CSV: {[os.path.basename(a) for a in arquivos]}")
-    print(f"ZIP: {[os.path.basename(a) for a in arquivos_zip]}")
-    
+
+    print("Arquivos TXT/CSV encontrados:", [os.path.basename(a) for a in arquivos])
+    print("Arquivos ZIP encontrados:", [os.path.basename(a) for a in arquivos_zip])
+
     if not arquivos and not arquivos_zip:
-        print("Nenhum arquivo de colhedoras encontrado na pasta dados!")
+        print("Nenhum arquivo de transbordo encontrado em dados/.")
         return
-    
-    print(f"\nEncontrados {len(arquivos)} arquivos de colhedoras (TXT/CSV) para processar.")
-    print(f"Encontrados {len(arquivos_zip)} arquivos ZIP de colhedoras para processar.")
-    
-    # Processar cada arquivo TXT/CSV
-    for arquivo in arquivos:
-        print(f"\nProcessando arquivo TXT/CSV: {os.path.basename(arquivo)}")
-        processar_arquivo(arquivo, diretorio_saida)
-    
-    # Processar cada arquivo ZIP
-    for arquivo_zip in arquivos_zip:
-        print(f"\nProcessando arquivo ZIP: {os.path.basename(arquivo_zip)}")
-        
-        # Extrair arquivo ZIP para pasta temporária
-        print(f"Extraindo arquivo ZIP: {arquivo_zip}")
-        arquivos_extraidos, pasta_temp = extrair_arquivo_zip(arquivo_zip)
-        
-        if not arquivos_extraidos:
-            print(f"Nenhum arquivo TXT ou CSV encontrado no ZIP {os.path.basename(arquivo_zip)}")
+
+    # Processar TXT/CSV
+    for arq in arquivos:
+        print(f"\nProcessando arquivo: {os.path.basename(arq)}")
+        processar_arquivo(arq, diretorio_saida)
+
+    # Processar ZIP
+    for arq_zip in arquivos_zip:
+        print(f"\nProcessando ZIP: {os.path.basename(arq_zip)}")
+        extraidos, pasta_temp = extrair_arquivo_zip(arq_zip)
+        if not extraidos:
+            print("Nenhum TXT/CSV encontrado dentro do ZIP.")
             continue
-        
-        print(f"Extraídos {len(arquivos_extraidos)} arquivos do ZIP:")
-        for arquivo in arquivos_extraidos:
-            print(f"  - {os.path.basename(arquivo)}")
-        
-        # Processar cada arquivo extraído
-        for arquivo_extraido in arquivos_extraidos:
-            # Filtrar arquivos que contenham "transbordo" no nome
-            if "transbordo" not in os.path.basename(arquivo_extraido).lower():
-                print(f"\nProcessando arquivo extraído: {os.path.basename(arquivo_extraido)}")
-                processar_arquivo(arquivo_extraido, diretorio_saida)
-        
-        # Limpar pasta temporária se foi criada
+        for ex in extraidos:
+            if "colhedora" in os.path.basename(ex).lower():
+                continue
+            print(f"  - Processando extraído {os.path.basename(ex)}")
+            processar_arquivo(ex, diretorio_saida)
         if pasta_temp:
             try:
-                print(f"Removendo pasta temporária: {pasta_temp}")
                 shutil.rmtree(pasta_temp)
-                print(f"Pasta temporária removida com sucesso")
-            except Exception as e:
-                print(f"Erro ao remover pasta temporária {pasta_temp}: {str(e)}")
-    
-    print("\nProcessamento de todos os arquivos concluído!")
+            except:
+                pass
+    print("\nProcessamento de transbordos concluído!")
 
 def carregar_substituicoes_operadores():
     """
