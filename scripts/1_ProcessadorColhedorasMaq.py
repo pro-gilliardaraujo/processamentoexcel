@@ -1476,7 +1476,7 @@ def criar_excel_com_planilhas(df_base, disp_mecanica, eficiencia_energetica, vel
         disp_mecanica.to_excel(writer, sheet_name='Disponibilidade Mecânica', index=False)
         eficiencia_energetica.to_excel(writer, sheet_name='Eficiência Energética', index=False)
         velocidade_media_produtiva.to_excel(writer, sheet_name='Velocidade Média Produtiva', index=False)
-        hora_elevador.to_excel(writer, sheet_name='Hora Elevador', index=False)
+        hora_elevador.to_excel(writer, sheet_name='Eficiência Energética', index=False)
         uso_gps.to_excel(writer, sheet_name='Uso GPS', index=False)
         
         # Planilhas auxiliares
@@ -1541,7 +1541,7 @@ def criar_excel_com_planilhas(df_base, disp_mecanica, eficiencia_energetica, vel
                     # Coluna C (Horas Produtivas)
                     cell = worksheet.cell(row=row, column=3)
                     cell.number_format = '0.00'
-                    # Coluna D (Eficiência)
+                    # Coluna D (Eficiência Elevador)
                     cell = worksheet.cell(row=row, column=4)
                     cell.number_format = '0.00%'
             
@@ -1551,16 +1551,10 @@ def criar_excel_com_planilhas(df_base, disp_mecanica, eficiencia_energetica, vel
                     cell = worksheet.cell(row=row, column=2)
                     cell.number_format = '0.00'
             
-            elif sheet_name == 'Hora Elevador':
+            elif sheet_name == 'Eficiência Energética':
                 for row in range(2, worksheet.max_row + 1):
-                    # Coluna B (Horas Elevador)
+                    # Coluna B (Eficiência)
                     cell = worksheet.cell(row=row, column=2)
-                    cell.number_format = '0.00'
-                    # Coluna C (Horas Motor)
-                    cell = worksheet.cell(row=row, column=3)
-                    cell.number_format = '0.00'
-                    # Coluna D (Eficiência Elevador)
-                    cell = worksheet.cell(row=row, column=4)
                     cell.number_format = '0.00%'
             
             elif sheet_name == 'Uso GPS':
@@ -2361,7 +2355,7 @@ def criar_excel_planilhas_reduzidas(df_base, disp_mecanica, velocidade_media_pro
         # Motor Ocioso por máquina
         motor_ocioso.to_excel(writer, sheet_name='Motor Ocioso', index=False)
         # Hora Elevador por máquina
-        hora_elevador.to_excel(writer, sheet_name='Hora Elevador', index=False)
+        hora_elevador.to_excel(writer, sheet_name='Eficiência Energética', index=False)
         # Lavagem (sempre incluir, mesmo se não houver registros)
         if df_lavagem is not None:
             df_lavagem.to_excel(writer, sheet_name='Lavagem', index=False)
@@ -2429,14 +2423,10 @@ def criar_excel_planilhas_reduzidas(df_base, disp_mecanica, velocidade_media_pro
                     # Coluna D (Tempo Ocioso)
                     ws.cell(row=row, column=4).number_format = '0.00'
             
-            elif sh_name == 'Hora Elevador':
+            elif sh_name == 'Eficiência Energética':
                 for row in range(2, ws.max_row + 1):
-                    # Coluna B (Horas Elevador)
-                    ws.cell(row=row, column=2).number_format = '0.00'
-                    # Coluna C (Horas Motor)
-                    ws.cell(row=row, column=3).number_format = '0.00'
-                    # Coluna D (Eficiência Elevador)
-                    ws.cell(row=row, column=4).number_format = '0.00%'
+                    # Coluna B (Eficiência)
+                    ws.cell(row=row, column=2).number_format = '0.00%'
             
             elif sh_name == 'Ofensores':
                 if df_ofensores is not None and not df_ofensores.empty:
