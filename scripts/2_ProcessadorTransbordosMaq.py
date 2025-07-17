@@ -537,6 +537,14 @@ def calcular_base_calculo(df):
         if dias_operador > 1:
             horas_produtivas = horas_produtivas / dias_operador
         
+        # NOVO: Horas Carregando (operação 6300 - CARREG CANA COLHIDA NO TRANSBORDO)
+        horas_carregando = calcular_tempo_por_diferenca_hora(
+            dados_filtrados,
+            (dados_filtrados['Operacao'] == '6300 - CARREG CANA COLHIDA NO TRANSBORDO')
+        )
+        if dias_operador > 1:
+            horas_carregando = horas_carregando / dias_operador
+        
         # % Utilização RTK (em decimal 0-1)
         utilizacao_rtk = calcular_porcentagem(rtk, horas_produtivas)
         
@@ -570,6 +578,7 @@ def calcular_base_calculo(df):
             '%': percent_elevador,
             'RTK': rtk,
             'Horas Produtivas': horas_produtivas,
+            'Horas Carregando': horas_carregando,
             '% Utilização RTK': utilizacao_rtk,
             'Motor Ligado': motor_ligado,
             '% Eficiência Elevador': eficiencia_elevador,
@@ -1534,10 +1543,10 @@ def criar_excel_com_planilhas(df_base, disp_mecanica, eficiencia_energetica, vel
             
             elif sheet_name == 'Eficiência Energética':
                 for row in range(2, worksheet.max_row + 1):
-                    # Coluna B (Horas Motor)
+                    # Coluna B (Horas Produtivas)
                     cell = worksheet.cell(row=row, column=2)
                     cell.number_format = '0.00'
-                    # Coluna C (Horas Produtivas)
+                    # Coluna C (Horas Carregando)
                     cell = worksheet.cell(row=row, column=3)
                     cell.number_format = '0.00'
                     # Coluna D (Eficiência)
@@ -1720,7 +1729,7 @@ def processar_arquivo_maquina(caminho_arquivo, diretorio_saida):
     base_calculo = calcular_base_calculo(df_base)
 
     # Métricas específicas
-    eficiencia_energetica = calcular_eficiencia_energetica(base_calculo)
+    eficiencia_energetica = calcular_eficiencia_energetica_frota(df_base)
     falta_apontamento = calcular_falta_apontamento(base_calculo)
     uso_gps = calcular_uso_gps(df_base, base_calculo)
 
@@ -1790,6 +1799,7 @@ def processar_arquivo_maquina(caminho_arquivo, diretorio_saida):
     criar_excel_planilhas_reduzidas(
         df_base=df_base,
         disp_mecanica=disp_mecanica,
+        eficiencia_energetica=eficiencia_energetica,
         velocidade_media_produtiva=media_velocidade,
         uso_gps=uso_gps_maquina,
         motor_ocioso=motor_ocioso_maquina,
@@ -2266,7 +2276,8 @@ def calcular_uso_gps_maquina(df):
         })
     return pd.DataFrame(resultados)
 
-def criar_excel_planilhas_reduzidas(df_base, disp_mecanica, velocidade_media_produtiva, uso_gps, motor_ocioso, hora_elevador, df_lavagem, df_ofensores, df_intervalos, horas_por_frota, caminho_saida):
+def criar_excel_planilhas_reduzidas(df_base, disp_mecanica, eficiencia_energetica, velocidade_media_produtiva,
+                            uso_gps, motor_ocioso, hora_elevador, df_lavagem, df_ofensores, df_intervalos, horas_por_frota, caminho_saida):
     """
     Gera arquivo Excel contendo planilhas BASE, Lavagem, Ofensores, Intervalos, Horas por Frota, Disponibilidade Mecânica, Velocidade Média Produtiva, Uso GPS e Hora Elevador por máquina.
 
@@ -2329,6 +2340,8 @@ def criar_excel_planilhas_reduzidas(df_base, disp_mecanica, velocidade_media_pro
         df_base.to_excel(writer, sheet_name='BASE', index=False)
         # Disponibilidade Mecânica
         disp_mecanica.to_excel(writer, sheet_name='Disponibilidade Mecânica', index=False)
+        # Eficiência Energética
+        eficiencia_energetica.to_excel(writer, sheet_name='Eficiência Energética', index=False)
         # Velocidade Média Produtiva
         velocidade_media_produtiva.to_excel(writer, sheet_name='Média Velocidade', index=False)
         # Uso GPS por máquina
@@ -2388,6 +2401,18 @@ def criar_excel_planilhas_reduzidas(df_base, disp_mecanica, velocidade_media_pro
                 for row in range(2, ws.max_row + 1):
                     # Coluna B (Velocidade Média Produtiva)
                     ws.cell(row=row, column=2).number_format = '0.00'
+            
+            elif sh_name == 'Eficiência Energética':
+                for row in range(2, ws.max_row + 1):
+                    # Coluna B (Horas Produtivas)
+                    ws.cell(row=row, column=2).number_format = '0.00'
+                    # Coluna C (Horas Carregando)
+                    ws.cell(row=row, column=3).number_format = '0.00'
+                    # Coluna D (Horas Motor)
+                    ws.cell(row=row, column=4).number_format = '0.00'
+                    # Coluna E (Eficiência)
+                    if ws.max_column >= 5:
+                        ws.cell(row=row, column=5).number_format = '0.00%'
             
             elif sh_name == 'Uso GPS':
                 for row in range(2, ws.max_row + 1):
@@ -2995,22 +3020,127 @@ def calcular_falta_apontamento(base_calculo: pd.DataFrame) -> pd.DataFrame:
 
 
 def calcular_eficiencia_energetica(base_calculo: pd.DataFrame) -> pd.DataFrame:
-    """Retorna eficiência energética (Horas Produtivas / Horas totais) por operador."""
-    colunas_necessarias = ['Operador', 'Horas Produtivas', 'Horas totais']
+    """Retorna eficiência energética por operador, adicionando a coluna Horas Carregando.
+
+    Eficiência = Horas Produtivas / Horas totais
+    """
+    colunas_necessarias = ['Operador', 'Horas Produtivas', 'Horas totais', 'Horas Carregando']
     if not all(col in base_calculo.columns for col in colunas_necessarias):
-        return pd.DataFrame(columns=['Operador', 'Eficiência'])
+        # Caso alguma coluna não exista, retorna DataFrame vazio com cabeçalhos esperados
+        return pd.DataFrame(columns=['Operador', 'Horas Produtivas', 'Horas Carregando', 'Eficiência'])
 
     col_frota = 'Equipamento' if 'Equipamento' in base_calculo.columns else 'Frota'
     agrup = base_calculo[colunas_necessarias].groupby('Operador').sum().reset_index()
-    agrup['Eficiência'] = agrup.apply(lambda r: r['Horas Produtivas'] / r['Horas totais'] if r['Horas totais'] > 0 else 0, axis=1)
 
+    # Calcula eficiência evitando divisão por zero
+    agrup['Eficiência'] = agrup.apply(
+        lambda r: r['Horas Produtivas'] / r['Horas totais'] if r['Horas totais'] > 0 else 0, axis=1
+    )
+
+    # Monta resultado final ordenado pelo nome do operador
     resultados = []
     for _, row in agrup.iterrows():
         op = row['Operador']
         frotas = sorted(base_calculo[base_calculo['Operador'] == op][col_frota].astype(str).unique())
-        resultados.append({'Operador': f"{op} ({', '.join(frotas)})" if frotas else op,
-                           'Eficiência': row['Eficiência']})
+        operador_nome = f"{op} ({', '.join(frotas)})" if frotas else op
+        resultados.append({
+            'Operador': operador_nome,
+            'Horas Produtivas': round(row['Horas Produtivas'], 2),
+            'Horas Carregando': round(row['Horas Carregando'], 2),
+            'Eficiência': row['Eficiência']
+        })
+
     return pd.DataFrame(resultados)
+
+def calcular_eficiencia_energetica_frota(df: pd.DataFrame) -> pd.DataFrame:
+    """Calcula eficiência energética por frota (equipamento).
+
+    Horas Produtivas  = soma de Diferença_Hora onde Grupo Operacao == 'Produtiva'
+    Horas Motor       = soma de Diferença_Hora onde Motor Ligado == 1
+    Eficiência (%)    = Horas Produtivas / Horas Motor
+    """
+    if 'Equipamento' not in df.columns or 'Diferença_Hora' not in df.columns:
+        return pd.DataFrame(columns=['Frota', 'Horas Produtivas', 'Horas Motor', 'Eficiência'])
+
+    resultados = []
+    for frota, grupo in df.groupby('Equipamento'):
+        if pd.isna(frota):
+            continue
+        horas_prod = grupo[grupo['Grupo Operacao'] == 'Produtiva']['Diferença_Hora'].sum()
+        horas_carreg = grupo[grupo['Operacao'] == '6300 - CARREG CANA COLHIDA NO TRANSBORDO']['Diferença_Hora'].sum()
+        horas_motor = grupo[grupo['Motor Ligado'] == 1]['Diferença_Hora'].sum()
+        eficiencia = horas_prod / horas_motor if horas_motor > 0 else 0
+        resultados.append({
+            'Frota': frota,
+            'Horas Produtivas': round(horas_prod, 2),
+            'Horas Carregando': round(horas_carreg, 2),
+            'Horas Motor': round(horas_motor, 2),
+            'Eficiência': eficiencia
+        })
+
+    return pd.DataFrame(resultados).sort_values('Frota')
+
+def calcular_basculando_por_intervalos(df_base):
+    """Agrupa intervalos sequenciais do Estado Operacional 'BASCULANDO'.
+
+    Retorna DataFrame por frota com: Intervalos Válidos, Tempo Total (h) e Tempo Médio (h).
+    """
+
+    colunas_req = {'Equipamento', 'Estado Operacional', 'Diferença_Hora'}
+    if not colunas_req.issubset(df_base.columns):
+        return pd.DataFrame(columns=['Frota', 'Intervalos Válidos', 'Tempo Total', 'Tempo Médio'])
+
+    tempo_minimo_horas = tempoMinimoManobras / 3600  # 15 s -> h
+    tolerancia_interrupcao = 30 / 3600  # 30 s -> h
+
+    df_valid = df_base[(df_base['Diferença_Hora'] >= TEMPO_MINIMO_VALIDO)].copy()
+
+    # Ordenação temporal
+    sort_cols = ['Equipamento']
+    if 'Data' in df_valid.columns:
+        sort_cols.append('Data')
+    if 'Hora' in df_valid.columns:
+        sort_cols.append('Hora')
+    df_valid = df_valid.sort_values(sort_cols).reset_index(drop=True)
+
+    resultados = []
+    for frota, grupo in df_valid.groupby('Equipamento'):
+        if pd.isna(frota):
+            continue
+        intervalo_ativo = False
+        tempo_intervalo = 0
+        intervalos = []
+        for _, row in grupo.iterrows():
+            eh_basc = row['Estado Operacional'] == 'BASCULANDO'
+            dt = row['Diferença_Hora']
+            if eh_basc:
+                if not intervalo_ativo:
+                    intervalo_ativo = True
+                    tempo_intervalo = dt
+                else:
+                    tempo_intervalo += dt
+            else:
+                if intervalo_ativo:
+                    if dt >= tolerancia_interrupcao:
+                        if tempo_intervalo >= tempo_minimo_horas:
+                            intervalos.append(tempo_intervalo)
+                        intervalo_ativo = False
+                        tempo_intervalo = 0
+                    # se pausa < tolerância, mantém intervalo aberto (não soma)
+
+        # Finaliza último intervalo
+        if intervalo_ativo and tempo_intervalo >= tempo_minimo_horas:
+            intervalos.append(tempo_intervalo)
+
+        n_int = len(intervalos)
+        tempo_tot = sum(intervalos)
+        tempo_med = tempo_tot / n_int if n_int else 0
+        resultados.append({'Frota': frota,
+                           'Intervalos Válidos': n_int,
+                           'Tempo Total': tempo_tot,
+                           'Tempo Médio': tempo_med})
+
+    return pd.DataFrame(resultados).sort_values('Tempo Total', ascending=False)
 
 if __name__ == "__main__":
     print("="*80)

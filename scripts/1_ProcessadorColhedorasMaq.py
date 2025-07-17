@@ -1612,22 +1612,22 @@ def criar_excel_com_planilhas(df_base, disp_mecanica, eficiencia_energetica, vel
                         # Verificar se não é a linha informativa (para não formatar como hora)
                         equipamento_cell = worksheet.cell(row=row, column=2)
                         if equipamento_cell.value != 'NÃO FORAM ENCONTRADOS DADOS DE LAVAGEM PARA A DATA INFORMADA':
-                            # Coluna D (Início)
-                            cell = worksheet.cell(row=row, column=4)
-                            cell.number_format = 'hh:mm:ss'
-                            
-                            # Coluna E (Fim)
-                            cell = worksheet.cell(row=row, column=5)
-                            cell.number_format = 'hh:mm:ss'
-                            
-                            # Coluna F (Duração)
-                            cell = worksheet.cell(row=row, column=6)
+                        # Coluna D (Início)
+                        cell = worksheet.cell(row=row, column=4)
+                        cell.number_format = 'hh:mm:ss'
+                        
+                        # Coluna E (Fim)
+                        cell = worksheet.cell(row=row, column=5)
+                        cell.number_format = 'hh:mm:ss'
+                        
+                        # Coluna F (Duração)
+                        cell = worksheet.cell(row=row, column=6)
+                        cell.number_format = '0.00'
+                        
+                        # Coluna G (Tempo Total do Dia) - só formatar se não for None/vazio
+                        cell = worksheet.cell(row=row, column=7)
+                        if cell.value is not None and cell.value != "":
                             cell.number_format = '0.00'
-                            
-                            # Coluna G (Tempo Total do Dia) - só formatar se não for None/vazio
-                            cell = worksheet.cell(row=row, column=7)
-                            if cell.value is not None and cell.value != "":
-                                cell.number_format = '0.00'
             
             elif sheet_name == 'Coordenadas':
                 # Formatar coluna Hora como hora
@@ -2442,16 +2442,16 @@ def criar_excel_planilhas_reduzidas(df_base, disp_mecanica, velocidade_media_pro
                         # Verificar se não é a linha informativa (para não formatar como hora)
                         equipamento_cell = ws.cell(row=row, column=2)
                         if equipamento_cell.value != 'NÃO FORAM ENCONTRADOS DADOS DE LAVAGEM PARA A DATA INFORMADA':
-                            # Coluna D (Início)
-                            ws.cell(row=row, column=4).number_format = 'hh:mm:ss'
-                            # Coluna E (Fim)
-                            ws.cell(row=row, column=5).number_format = 'hh:mm:ss'
-                            # Coluna F (Duração)
-                            ws.cell(row=row, column=6).number_format = '0.00'
-                            # Coluna G (Tempo Total do Dia) - só formatar se não for None/vazio
-                            cell = ws.cell(row=row, column=7)
-                            if cell.value is not None and cell.value != "":
-                                cell.number_format = '0.00'
+                        # Coluna D (Início)
+                        ws.cell(row=row, column=4).number_format = 'hh:mm:ss'
+                        # Coluna E (Fim)
+                        ws.cell(row=row, column=5).number_format = 'hh:mm:ss'
+                        # Coluna F (Duração)
+                        ws.cell(row=row, column=6).number_format = '0.00'
+                        # Coluna G (Tempo Total do Dia) - só formatar se não for None/vazio
+                        cell = ws.cell(row=row, column=7)
+                        if cell.value is not None and cell.value != "":
+                            cell.number_format = '0.00'
             
             elif sh_name == 'Intervalos':
                 if df_intervalos is not None and not df_intervalos.empty:

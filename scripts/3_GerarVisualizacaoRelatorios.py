@@ -14,11 +14,11 @@ from matplotlib.patches import Patch
 CONFIG = {
     # Tamanho da figura (largura, altura)
     # Altura foi reduzida para 1/3 da original (original ≈ 8)
-    'FIG_SIZE': (16, 8 /2),
+    'FIG_SIZE': (15, 10 /1.75),
 
     # Altura das barras horizontais no gráfico de Gantt
     # Original = 0.6 → agora 1/3
-    'BAR_HEIGHT': 0.6 / 2,
+    'BAR_HEIGHT': (0.3),
 
     # Cores das barras por tipo de intervalo
     'COLORS': {
@@ -27,12 +27,16 @@ CONFIG = {
         'Manutenção': '#FF6B6B'  # Vermelho
     },
 
-    # Posições verticais (y) das barras
+    # Posições verticais das barras: deslocadas +0.5 para criar folga inferior
     'Y_POS': {
-        'Produtivo': 1,   # Linha superior
-        'Disponível': 0,  # Linha central
-        'Manutenção': -1  # Linha inferior
+        'Produtivo': 2.5,    # Linha superior (antes 1)
+        'Disponível': 2.0,   # Linha central (antes 0)
+        'Manutenção': 1.5   # Linha inferior (antes -1)
     },
+
+    # Deslocamento vertical aplicado a TODAS as barras
+    # Aumente para mover tudo para cima e criar espaço abaixo
+    'Y_SHIFT': 4,
 
     # Intervalo entre marcas principais da régua inferior (em horas)
     'MAIN_TICK_INTERVAL_H': 1,
@@ -43,14 +47,23 @@ CONFIG = {
     # Rotação dos rótulos da régua superior (início/fim de manutenções)
     'TOP_TICK_ROTATION': 0,
 
-    # Offset vertical (pt) da régua de manutenção; valor negativo aproxima da barra
-    'MAINT_TICK_OFFSET_PT': -50,
+    # Offset da régua de manutenção (negativo empurra para baixo); -10 ≈ colado à barra
+    'MAINT_TICK_OFFSET_PT': -10,
+
+    # Offset vertical entre rótulos em um mesmo cluster (pontos, positivo sobe)
+    'LABEL_CLUSTER_OFFSET_PT': 10,
+    # Fração vertical (0–1) do eixo para posicionar texto de início/fim de manutenção
+    # Pequeno valor eleva o texto próximo à barra.
+    'MAINT_LABEL_Y_FRAC': 0.30,
 
     # Transforma durações maiores que este limiar (min) em texto dentro da barra
     'LABEL_THRESHOLD_MIN': 60,
 
     # Diretório onde os gráficos serão salvos
-    'OUTPUT_DIR': os.path.join('output', 'graficos')
+    'OUTPUT_DIR': os.path.join('output', 'graficos'),
+
+    # Ajuste vertical da legenda (fração fora do eixo). Menor → legenda mais próxima do gráfico
+    'LEGEND_Y': 1.05,
 }
 # ====================================================================
 
@@ -83,22 +96,26 @@ def plot_gantt(df: pd.DataFrame, equipamento: Optional[str] = None, data: Option
     if data is not None and 'Data' in df_plot.columns:
         df_plot = df_plot[df_plot['Data'] == data]
 
-    if df_plot.empty:
-        print('Sem dados para plotar.')
-        return
-
-    # Conversões
     df_plot['inicio_min'] = df_plot['Início'].apply(hora_str_para_minutos)
     df_plot['duracao_min'] = df_plot['Duração (horas)'] * 60
 
+    # Descarta intervalos de manutenção com duração zero (erro de apontamento)
+    df_plot = df_plot[~((df_plot['Tipo'] == 'Manutenção') & (df_plot['duracao_min'] == 0))]
+
+    if df_plot.empty:
+        print('Sem dados válidos após remover intervalos de duração zero.')
+        return
+
     # Figura
     fig, ax = plt.subplots(figsize=CONFIG['FIG_SIZE'])
+    # Oculta a borda superior para não cruzar a legenda
+    ax.spines['top'].set_visible(False)
 
     # Barras
     for _, row in df_plot.iterrows():
         tipo = row['Tipo']
         cor = CONFIG['COLORS'].get(tipo, '#808080')
-        y = CONFIG['Y_POS'].get(tipo, 0)
+        y = CONFIG['Y_POS'].get(tipo, 0) + CONFIG.get('Y_SHIFT', 0)
         ax.barh(y, row['duracao_min'], left=row['inicio_min'], height=CONFIG['BAR_HEIGHT'],
                  color=cor, edgecolor='black', linewidth=0.4, alpha=0.9, zorder=3)
         if row['duracao_min'] >= CONFIG['LABEL_THRESHOLD_MIN']:
@@ -133,19 +150,37 @@ def plot_gantt(df: pd.DataFrame, equipamento: Optional[str] = None, data: Option
 
         # Parâmetros de controle
         OVERLAP_THRESHOLD_MIN = 20  # diferença máx. p/ considerar labels próximas (minutos)
-        V_OFFSET_PT = -10           # deslocamento vertical entre labels (pontos)
+        V_OFFSET_PT = CONFIG.get('LABEL_CLUSTER_OFFSET_PT', 10)  # deslocamento vertical (pontos)
+
+        # Posição base vertical das anotações
+        base_y = CONFIG.get('MAINT_LABEL_Y_FRAC', 0)
 
         # Estrutura para formar clusters de posições próximas
         pontos = []  # (pos, label)
-        for _, r in manut.iterrows():
+        manut_sorted = manut.sort_values('inicio_min').reset_index(drop=True)
+        total_interv = len(manut_sorted)
+        for idx_r, r in manut_sorted.iterrows():
             ini = r['inicio_min']
             fim = r['inicio_min'] + r['duracao_min']
             ini_str = f"{int(ini//60):02d}:{int(ini%60):02d}"
             fim_str = f"{int(fim//60):02d}:{int(fim%60):02d}"
+
+            # Determinar distância para próximo intervalo (em minutos)
+            prox_ini_dist = None
+            if idx_r < total_interv - 1:
+                prox_ini = manut_sorted.iloc[idx_r + 1]['inicio_min']
+                prox_ini_dist = prox_ini - fim  # pode ser negativo se sobreposto
+
             if r['duracao_min'] < 60:
-                pontos.append((ini, f"{ini_str}\n{fim_str}"))
+                # Intervalo curto → rótulo único/empilhado centralizado no meio do bloco
+                centro = ini + r['duracao_min'] / 2
+                pontos.append((centro, ini_str if ini_str == fim_str else f"{ini_str}\n{fim_str}"))
             else:
-                pontos.extend([(ini, ini_str), (fim, fim_str)])
+                # Intervalo longo (>1 h)
+                pontos.append((ini, ini_str))
+                # Só adiciona tick de fim se distante do próximo início
+                if prox_ini_dist is None or prox_ini_dist >= OVERLAP_THRESHOLD_MIN:
+                    pontos.append((fim, fim_str))
 
         # Ordenar por posição
         pontos = sorted(pontos, key=lambda x: x[0])
@@ -158,16 +193,21 @@ def plot_gantt(df: pd.DataFrame, equipamento: Optional[str] = None, data: Option
             else:
                 clusters[-1].append((pos, lbl))
 
-        # Desenhar ticks e anotações sem label na própria tick para evitar sobreposição
+        # Definir posições dos rótulos (usado para anotações), mas ocultar as marcas visuais
         ax_mid.set_xticks([p for p, _ in pontos])
         ax_mid.set_xticklabels([''] * len(pontos))
+        # Oculta as marcas (ticks) deixando apenas os textos de anotação
+        ax_mid.tick_params(axis='x', which='both', length=0)
 
         for cluster in clusters:
             for idx, (pos, lbl) in enumerate(cluster):
-                # Offset vertical por índice dentro do cluster
-                offset = idx * V_OFFSET_PT
+                # Distribui rótulos alternando acima/abaixo da linha base para evitar sobreposição
+                nivel = (idx // 2) + 1  # 1,1,2,2,3,3...
+                direcao = -1 if idx % 2 == 0 else 1  # cima, baixo, cima, baixo...
+                offset = direcao * nivel * V_OFFSET_PT
+
                 ax_mid.annotate(lbl,
-                                 xy=(pos, 0),
+                                 xy=(pos, base_y),
                                  xycoords=('data', 'axes fraction'),
                                  xytext=(0, offset),
                                  textcoords='offset points',
@@ -175,23 +215,25 @@ def plot_gantt(df: pd.DataFrame, equipamento: Optional[str] = None, data: Option
         ax_mid.set_xlabel('')
 
     # Config Y
-    ax.set_yticks(list(CONFIG['Y_POS'].values()))
-    ax.set_yticklabels([])  # Remove textos laterais
-    ax.set_ylim(min(CONFIG['Y_POS'].values()) - 1, max(CONFIG['Y_POS'].values()) + 1)
+    # Ajuste de eixos considerando o deslocamento
+    y_vals = [v + CONFIG.get('Y_SHIFT', 0) for v in CONFIG['Y_POS'].values()]
+    ax.set_yticks(y_vals)
+    ax.set_yticklabels([])
+    ax.set_ylim(min(y_vals) - 1, max(y_vals) + 1)
 
     # Grade
     ax.grid(True, axis='x', linestyle='--', alpha=0.3, zorder=0)
 
     # Legenda (horizontal)
     legend_elems = [Patch(facecolor=c, label=t) for t, c in CONFIG['COLORS'].items()]
-    ax.legend(handles=legend_elems, loc='upper center', bbox_to_anchor=(0.5, 1.08),
+    legend_y = CONFIG.get('LEGEND_Y', 1.08)
+    ax.legend(handles=legend_elems, loc='upper center', bbox_to_anchor=(0.5, legend_y),
               ncol=len(legend_elems), frameon=False, fontsize=9)
 
-    # Título personalizado
-    title_parts = ['Linha do Tempo Operacional']
-    if equipamento: title_parts.append(str(equipamento))
-    if data: title_parts.append(str(data))
-    ax.set_title(' | '.join(title_parts), fontweight='bold', pad=15)
+    # Título: somente o equipamento (frota)
+    title_txt = str(equipamento) if equipamento else ''
+
+    ax.set_title(title_txt, fontweight='bold', pad=25)
 
     plt.tight_layout()
 
