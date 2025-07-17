@@ -7,6 +7,7 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.patches import Patch
+from matplotlib.ticker import MultipleLocator
 
 # ====================================================================
 # BLOCO DE CONFIGURAÇÃO – altere aqui o layout como desejar
@@ -14,7 +15,7 @@ from matplotlib.patches import Patch
 CONFIG = {
     # Tamanho da figura (largura, altura)
     # Altura foi reduzida para 1/3 da original (original ≈ 8)
-    'FIG_SIZE': (15, 10 /1.75),
+    'FIG_SIZE': (15, 10 /2.5),
 
     # Altura das barras horizontais no gráfico de Gantt
     # Original = 0.6 → agora 1/3
@@ -63,7 +64,15 @@ CONFIG = {
     'OUTPUT_DIR': os.path.join('output', 'graficos'),
 
     # Ajuste vertical da legenda (fração fora do eixo). Menor → legenda mais próxima do gráfico
-    'LEGEND_Y': 1.05,
+    'LEGEND_Y': 1.0,
+
+    # Exibir prévia na tela? False por padrão
+    'VER_PREVIA': True,
+
+    # Intervalo das sublinhas (minutos)
+    'SUB_TICK_INTERVAL_MIN': 15,
+    # Opacidade das sublinhas (0–1). 0.4 deixa bem visível sem poluir
+    'SUB_TICK_ALPHA': 0.2,
 }
 # ====================================================================
 
@@ -221,8 +230,16 @@ def plot_gantt(df: pd.DataFrame, equipamento: Optional[str] = None, data: Option
     ax.set_yticklabels([])
     ax.set_ylim(min(y_vals) - 1, max(y_vals) + 1)
 
-    # Grade
-    ax.grid(True, axis='x', linestyle='--', alpha=0.3, zorder=0)
+    # Grade maior (hora em hora) – linha contínua
+    ax.grid(True, axis='x', linestyle='-', alpha=0.3, zorder=0, which='major')
+
+    # Sublinhas a cada 15min
+    sub_int = CONFIG.get('SUB_TICK_INTERVAL_MIN', 15)
+    ax.xaxis.set_minor_locator(MultipleLocator(sub_int))
+    # Oculta marcas/ticks menores; mantém apenas a grade
+    ax.tick_params(axis='x', which='minor', length=0, labelbottom=False)
+    # Grade menor (15 min) – tracejada
+    ax.grid(True, axis='x', which='minor', linestyle='--', alpha=CONFIG.get('SUB_TICK_ALPHA', 0.4), zorder=0)
 
     # Legenda (horizontal)
     legend_elems = [Patch(facecolor=c, label=t) for t, c in CONFIG['COLORS'].items()]
@@ -272,9 +289,10 @@ def main():
     if not arquivos:
         print('Nenhum arquivo encontrado em output/*.xlsx')
         return
+    ver_previa = CONFIG.get('VER_PREVIA', False)
     for arq in arquivos:
         print('Processando', arq)
-        processar_arquivo_excel(arq)
+        processar_arquivo_excel(arq, exibir=ver_previa)
 
 if __name__ == '__main__':
     main() 
