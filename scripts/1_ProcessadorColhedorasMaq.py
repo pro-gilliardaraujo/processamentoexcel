@@ -1869,11 +1869,12 @@ def processar_arquivo_maquina(caminho_arquivo, diretorio_saida):
     # Calcular dados do painel direito (será calculado por frota individualmente no envio)
     try:
         # Manter dados globais para referência, mas calcular por frota no envio
-        dados_painel_direito_global = calcular_painel_direito_por_frota(df_lavagem, df_ofensores, frota_especifica=None)
+        dados_painel_direito_global = calcular_painel_direito_por_frota(df_lavagem, df_roletes, df_ofensores, frota_especifica=None)
     except Exception as e:
         print(f"⚠️ Erro ao calcular painel direito global: {e}")
         dados_painel_direito_global = {
             "lavagem": {"tem_dados": False, "total_intervalos": 0, "tempo_total_horas": 0, "equipamentos": []},
+            "roletes": {"tem_dados": False, "total_intervalos": 0, "tempo_total_horas": 0, "equipamentos": []},
             "ofensores": []
         }
 
@@ -4216,18 +4217,123 @@ def calcular_painel_direito_por_frota(df_lavagem, df_roletes, df_ofensores, frot
                 "equipamentos": []
             }
         
-        # 2. Processar dados de OFENSORES (usar dados da planilha como estão)
+        # 2. Processar dados de ROLETES (filtrados por frota se especificada)
+        if df_roletes is not None and not df_roletes.empty:
+            # Verificar se é a mensagem informativa (sem dados)
+            primeira_linha = df_roletes.iloc[0]
+            if 'NÃO FORAM ENCONTRADOS DADOS' in str(primeira_linha.get('Equipamento', '')):
+                print(f"  📋 Nenhum dado de roletes encontrado{' para frota ' + str(frota_especifica) if frota_especifica else ''}")
+                painel_direito["roletes"] = {
+                    "tem_dados": False,
+                    "total_intervalos": 0,
+                    "tempo_total_horas": 0,
+                    "equipamentos": []
+                }
+            else:
+                # Filtrar por frota específica se informada
+                df_roletes_filtrado = df_roletes
+                if frota_especifica is not None:
+                    df_roletes_filtrado = df_roletes[df_roletes['Equipamento'] == frota_especifica]
+                    print(f"  🔧 Processando roletes para frota {frota_especifica}: {len(df_roletes_filtrado)} registros")
+                else:
+                    print(f"  🔧 Processando {len(df_roletes)} registros de roletes (todos)")
+                
+                if df_roletes_filtrado.empty:
+                    print(f"  📋 Nenhum dado de roletes para frota {frota_especifica}")
+                    painel_direito["roletes"] = {
+                        "tem_dados": False,
+                        "total_intervalos": 0,
+                        "tempo_total_horas": 0,
+                        "equipamentos": []
+                    }
+                else:
+                    # Agrupar por equipamento
+                    equipamentos_roletes = []
+                    total_intervalos = 0
+                    tempo_total_global = 0
+                    
+                    # Verificar se as colunas esperadas existem
+                    colunas_roletes = df_roletes_filtrado.columns.tolist()
+                    print(f"  📊 Colunas de roletes: {colunas_roletes}")
+                    
+                    for equipamento in df_roletes_filtrado['Equipamento'].unique():
+                        dados_equip = df_roletes_filtrado[df_roletes_filtrado['Equipamento'] == equipamento]
+                        
+                        # Calcular métricas por equipamento
+                        intervalos_equip = len(dados_equip)
+                        
+                        # Buscar tempo total do dia (última coluna geralmente)
+                        tempo_total_equip = 0
+                        for col in dados_equip.columns:
+                            if any(palavra in col.lower() for palavra in ['total', 'dia']):
+                                tempo_total_equip = pd.to_numeric(dados_equip[col].iloc[0], errors='coerce')
+                                tempo_total_equip = 0 if pd.isna(tempo_total_equip) else tempo_total_equip
+                                break
+                        
+                        # Se não encontrou, somar as durações
+                        if tempo_total_equip == 0:
+                            for col in dados_equip.columns:
+                                if any(palavra in col.lower() for palavra in ['duração', 'duracao', 'horas']):
+                                    duracao_col = pd.to_numeric(dados_equip[col], errors='coerce').fillna(0)
+                                    tempo_total_equip = duracao_col.sum()
+                                    break
+                        
+                        equipamentos_roletes.append({
+                            "equipamento": int(equipamento) if pd.notna(equipamento) else 0,
+                            "intervalos": intervalos_equip,
+                            "tempo_total_horas": tempo_total_equip,
+                            "detalhes": dados_equip.to_dict('records')
+                        })
+                        
+                        total_intervalos += intervalos_equip
+                        tempo_total_global += tempo_total_equip
+                        
+                        print(f"    🔧 Equipamento {equipamento}: {intervalos_equip} intervalos, {tempo_total_equip:.2f}h total")
+                    
+                    painel_direito["roletes"] = {
+                        "tem_dados": True,
+                        "total_intervalos": total_intervalos,
+                        "tempo_total_horas": tempo_total_global,
+                        "equipamentos": equipamentos_roletes
+                    }
+        else:
+            print("  📋 DataFrame de roletes vazio")
+            painel_direito["roletes"] = {
+                "tem_dados": False,
+                "total_intervalos": 0,
+                "tempo_total_horas": 0,
+                "equipamentos": []
+            }
+        
+        # 3. Processar dados de OFENSORES (filtrados por frota individual)
         if df_ofensores is not None and not df_ofensores.empty:
-            # Os ofensores já vêm processados da planilha, usar todos os dados
+            # Filtrar ofensores por frota específica se informada
             df_ofensores_filtrado = df_ofensores
             
-            if frota_especifica is not None:
-                print(f"  ⚠️ Processando ofensores para frota {frota_especifica}: {len(df_ofensores)} registros")
+            # Verificar se há uma coluna que identifica a frota/equipamento
+            colunas_ofensores = df_ofensores.columns.tolist()
+            print(f"  📊 Colunas de ofensores disponíveis: {colunas_ofensores}")
+            
+            # Tentar identificar coluna de equipamento/frota
+            coluna_equipamento = None
+            for col in colunas_ofensores:
+                if any(palavra in col.lower() for palavra in ['equipamento', 'frota', 'maquina', 'equip']):
+                    coluna_equipamento = col
+                    break
+            
+            # Se não encontrou coluna específica, usar a primeira coluna
+            if coluna_equipamento is None and len(colunas_ofensores) > 0:
+                coluna_equipamento = colunas_ofensores[0]
+                print(f"  ⚠️ Usando primeira coluna como equipamento: {coluna_equipamento}")
+            
+            # Filtrar por frota se especificada
+            if frota_especifica is not None and coluna_equipamento:
+                # Filtrar registros que correspondem à frota
+                mask_frota = df_ofensores[coluna_equipamento].astype(str).str.contains(str(frota_especifica), na=False)
+                df_ofensores_filtrado = df_ofensores[mask_frota]
+                print(f"  ⚠️ Processando ofensores para frota {frota_especifica}: {len(df_ofensores_filtrado)} de {len(df_ofensores)} registros")
             else:
                 print(f"  ⚠️ Processando {len(df_ofensores)} registros de ofensores (todos)")
-            
-            colunas_ofensores = df_ofensores_filtrado.columns.tolist()
-            print(f"  📊 Colunas de ofensores: {colunas_ofensores}")
             
             # Converter dados de ofensores
             ofensores_lista = []
@@ -4244,18 +4350,33 @@ def calcular_painel_direito_por_frota(df_lavagem, df_roletes, df_ofensores, frot
                         # Procurar por números no início da string
                         match = re.match(r'^(\d+)', str(primeira_coluna))
                         if match:
-                            ofensor["equipamento"] = int(match.group(1))
+                            codigo_num = int(match.group(1))
+                            if str(codigo_num).startswith('8'):  # Código de operação
+                                ofensor["codigo_operacao"] = codigo_num
+                                ofensor["equipamento"] = 0
+                            else:  # Número de equipamento
+                                ofensor["equipamento"] = codigo_num
+                                ofensor["codigo_operacao"] = 0
                         else:
                             ofensor["equipamento"] = 0
+                            ofensor["codigo_operacao"] = 0
                         ofensor[primeira_col_nome] = str(primeira_coluna)
                     elif pd.api.types.is_numeric_dtype(type(primeira_coluna)):
-                        ofensor["equipamento"] = int(primeira_coluna)
+                        valor_num = int(primeira_coluna)
+                        if str(valor_num).startswith('8'):  # Código de operação
+                            ofensor["codigo_operacao"] = valor_num
+                            ofensor["equipamento"] = 0
+                        else:  # Número de equipamento
+                            ofensor["equipamento"] = valor_num
+                            ofensor["codigo_operacao"] = 0
                         ofensor[primeira_col_nome] = primeira_coluna
                     else:
                         ofensor["equipamento"] = 0
+                        ofensor["codigo_operacao"] = 0
                         ofensor[primeira_col_nome] = str(primeira_coluna)
                 else:
                     ofensor["equipamento"] = 0
+                    ofensor["codigo_operacao"] = 0
                     ofensor[primeira_col_nome] = ""
                 
                 # Mapear outras colunas dinamicamente
@@ -4291,6 +4412,7 @@ def calcular_painel_direito_por_frota(df_lavagem, df_roletes, df_ofensores, frot
         frota_info = f" (frota {frota_especifica})" if frota_especifica else " (global)"
         print(f"✅ Painel direito calculado{frota_info}:")
         print(f"   🧽 Lavagem: {painel_direito['lavagem']['total_intervalos']} intervalos, {painel_direito['lavagem']['tempo_total_horas']:.2f}h")
+        print(f"   🔧 Roletes: {painel_direito['roletes']['total_intervalos']} intervalos, {painel_direito['roletes']['tempo_total_horas']:.2f}h")
         print(f"   ⚠️ Ofensores: {len(painel_direito['ofensores'])} registros")
         
         return painel_direito
@@ -4299,6 +4421,7 @@ def calcular_painel_direito_por_frota(df_lavagem, df_roletes, df_ofensores, frot
         print(f"❌ Erro ao calcular painel direito: {e}")
         return {
             "lavagem": {"tem_dados": False, "total_intervalos": 0, "tempo_total_horas": 0, "equipamentos": []},
+            "roletes": {"tem_dados": False, "total_intervalos": 0, "tempo_total_horas": 0, "equipamentos": []},
             "ofensores": []
         }
 
@@ -4441,12 +4564,13 @@ def enviar_dados_supabase(df_parametros, df_painel_esquerdo, df_lavagem, df_ofen
                 
                 # Calcular dados do painel direito específicos para esta frota
                 try:
-                    dados_painel_direito_frota = calcular_painel_direito_por_frota(df_lavagem, df_ofensores, frota_especifica=frota)
+                    dados_painel_direito_frota = calcular_painel_direito_por_frota(df_lavagem, df_roletes, df_ofensores, frota_especifica=frota)
                     print(f"      📊 Painel direito calculado para frota {frota}")
                 except Exception as e:
                     print(f"      ⚠️ Erro ao calcular painel direito para frota {frota}: {e}")
                     dados_painel_direito_frota = {
                         "lavagem": {"tem_dados": False, "total_intervalos": 0, "tempo_total_horas": 0, "equipamentos": []},
+                        "roletes": {"tem_dados": False, "total_intervalos": 0, "tempo_total_horas": 0, "equipamentos": []},
                         "ofensores": []
                     }
                 
