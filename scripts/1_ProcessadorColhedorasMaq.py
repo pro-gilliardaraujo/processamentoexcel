@@ -2912,12 +2912,22 @@ def processar_intervalos_dia(dados_dia, equipamento, data):
         grupo_operacao = row['Grupo Operacao']
         
         # Classificar o tipo de intervalo
+        estado = row.get('Estado', '')
+        
         if grupo_operacao == 'Manutenção':
             tipo_intervalo = 'Manutenção'
         elif grupo_operacao == 'Produtiva':
-            tipo_intervalo = 'Produtivo'
+            # Verificar se é manobra dentro da produção
+            if estado == 'MANOBRA':
+                tipo_intervalo = 'Manobras'
+            else:
+                tipo_intervalo = 'Colhendo'
         else:
-            tipo_intervalo = 'Disponível'
+            # Para outros grupos, verificar se é manobra
+            if estado == 'MANOBRA':
+                tipo_intervalo = 'Manobras'
+            else:
+                tipo_intervalo = 'Disponível'
         
         # Se é o primeiro registro ou mudou o tipo de intervalo
         if intervalo_atual is None or intervalo_atual != tipo_intervalo:
