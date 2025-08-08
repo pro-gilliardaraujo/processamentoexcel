@@ -1866,12 +1866,13 @@ def processar_arquivo_maquina(caminho_arquivo, diretorio_saida):
         print(f"⚠️ Erro ao calcular painel esquerdo: {e}")
         df_painel_esquerdo = pd.DataFrame()
 
-    # Calcular dados do painel direito
+    # Calcular dados do painel direito (será calculado por frota individualmente no envio)
     try:
-        dados_painel_direito = calcular_painel_direito(df_lavagem, df_ofensores)
+        # Manter dados globais para referência, mas calcular por frota no envio
+        dados_painel_direito_global = calcular_painel_direito_por_frota(df_lavagem, df_ofensores, frota_especifica=None)
     except Exception as e:
-        print(f"⚠️ Erro ao calcular painel direito: {e}")
-        dados_painel_direito = {
+        print(f"⚠️ Erro ao calcular painel direito global: {e}")
+        dados_painel_direito_global = {
             "lavagem": {"tem_dados": False, "total_intervalos": 0, "tempo_total_horas": 0, "equipamentos": []},
             "ofensores": []
         }
@@ -1903,7 +1904,7 @@ def processar_arquivo_maquina(caminho_arquivo, diretorio_saida):
         print("\n" + "="*50)
         print("📡 ENVIANDO DADOS PARA SUPABASE")
         print("="*50)
-        enviar_dados_supabase(df_parametros_medios, df_painel_esquerdo, dados_painel_direito, caminho_arquivo)
+        enviar_dados_supabase(df_parametros_medios, df_painel_esquerdo, df_lavagem, df_ofensores, caminho_arquivo)
     except Exception as e:
         print(f"⚠️ Erro ao enviar dados para Supabase: {e}")
         print("   Continuando processamento normalmente...")
@@ -4052,16 +4053,17 @@ def calcular_painel_esquerdo(df_base, horas_por_frota, hora_elevador, df_manobra
         print(f"❌ Erro ao calcular painel esquerdo: {e}")
         return pd.DataFrame()
 
-def calcular_painel_direito(df_lavagem, df_ofensores):
+def calcular_painel_direito_por_frota(df_lavagem, df_ofensores, frota_especifica=None):
     """
-    Calcula dados para o painel direito do dashboard (Lavagem e Ofensores).
+    Calcula dados para o painel direito do dashboard (Lavagem e Ofensores) para uma frota específica.
     
     Args:
         df_lavagem (DataFrame): Dados de intervalos de lavagem
         df_ofensores (DataFrame): Dados dos principais ofensores
+        frota_especifica (int, optional): ID da frota para filtrar os dados. Se None, retorna dados globais.
     
     Returns:
-        dict: Dados consolidados para o painel direito
+        dict: Dados consolidados para o painel direito da frota específica
     """
     try:
         print("=== CALCULANDO DADOS DO PAINEL DIREITO ===")
@@ -4071,12 +4073,12 @@ def calcular_painel_direito(df_lavagem, df_ofensores):
             "ofensores": []
         }
         
-        # 1. Processar dados de LAVAGEM
+        # 1. Processar dados de LAVAGEM (filtrados por frota se especificada)
         if df_lavagem is not None and not df_lavagem.empty:
             # Verificar se é a mensagem informativa (sem dados)
             primeira_linha = df_lavagem.iloc[0]
             if 'NÃO FORAM ENCONTRADOS DADOS' in str(primeira_linha.get('Equipamento', '')):
-                print("  📋 Nenhum dado de lavagem encontrado")
+                print(f"  📋 Nenhum dado de lavagem encontrado{' para frota ' + str(frota_especifica) if frota_especifica else ''}")
                 painel_direito["lavagem"] = {
                     "tem_dados": False,
                     "total_intervalos": 0,
@@ -4084,57 +4086,72 @@ def calcular_painel_direito(df_lavagem, df_ofensores):
                     "equipamentos": []
                 }
             else:
-                print(f"  🧽 Processando {len(df_lavagem)} registros de lavagem")
+                # Filtrar por frota específica se informada
+                df_lavagem_filtrado = df_lavagem
+                if frota_especifica is not None:
+                    df_lavagem_filtrado = df_lavagem[df_lavagem['Equipamento'] == frota_especifica]
+                    print(f"  🧽 Processando lavagem para frota {frota_especifica}: {len(df_lavagem_filtrado)} registros")
+                else:
+                    print(f"  🧽 Processando {len(df_lavagem)} registros de lavagem (todos)")
                 
-                # Agrupar por equipamento
-                equipamentos_lavagem = []
-                total_intervalos = 0
-                tempo_total_global = 0
-                
-                # Verificar se as colunas esperadas existem
-                colunas_lavagem = df_lavagem.columns.tolist()
-                print(f"  📊 Colunas de lavagem: {colunas_lavagem}")
-                
-                for equipamento in df_lavagem['Equipamento'].unique():
-                    dados_equip = df_lavagem[df_lavagem['Equipamento'] == equipamento]
+                if df_lavagem_filtrado.empty:
+                    print(f"  📋 Nenhum dado de lavagem para frota {frota_especifica}")
+                    painel_direito["lavagem"] = {
+                        "tem_dados": False,
+                        "total_intervalos": 0,
+                        "tempo_total_horas": 0,
+                        "equipamentos": []
+                    }
+                else:
+                    # Agrupar por equipamento
+                    equipamentos_lavagem = []
+                    total_intervalos = 0
+                    tempo_total_global = 0
                     
-                    # Calcular métricas por equipamento
-                    intervalos_equip = len(dados_equip)
+                    # Verificar se as colunas esperadas existem
+                    colunas_lavagem = df_lavagem_filtrado.columns.tolist()
+                    print(f"  📊 Colunas de lavagem: {colunas_lavagem}")
                     
-                    # Buscar tempo total do dia (última coluna geralmente)
-                    tempo_total_equip = 0
-                    for col in dados_equip.columns:
-                        if any(palavra in col.lower() for palavra in ['total', 'dia']):
-                            tempo_total_equip = pd.to_numeric(dados_equip[col].iloc[0], errors='coerce')
-                            tempo_total_equip = 0 if pd.isna(tempo_total_equip) else tempo_total_equip
-                            break
-                    
-                    # Se não encontrou, somar as durações
-                    if tempo_total_equip == 0:
+                    for equipamento in df_lavagem_filtrado['Equipamento'].unique():
+                        dados_equip = df_lavagem_filtrado[df_lavagem_filtrado['Equipamento'] == equipamento]
+                        
+                        # Calcular métricas por equipamento
+                        intervalos_equip = len(dados_equip)
+                        
+                        # Buscar tempo total do dia (última coluna geralmente)
+                        tempo_total_equip = 0
                         for col in dados_equip.columns:
-                            if any(palavra in col.lower() for palavra in ['duração', 'duracao', 'horas']):
-                                duracao_col = pd.to_numeric(dados_equip[col], errors='coerce').fillna(0)
-                                tempo_total_equip = duracao_col.sum()
+                            if any(palavra in col.lower() for palavra in ['total', 'dia']):
+                                tempo_total_equip = pd.to_numeric(dados_equip[col].iloc[0], errors='coerce')
+                                tempo_total_equip = 0 if pd.isna(tempo_total_equip) else tempo_total_equip
                                 break
+                        
+                        # Se não encontrou, somar as durações
+                        if tempo_total_equip == 0:
+                            for col in dados_equip.columns:
+                                if any(palavra in col.lower() for palavra in ['duração', 'duracao', 'horas']):
+                                    duracao_col = pd.to_numeric(dados_equip[col], errors='coerce').fillna(0)
+                                    tempo_total_equip = duracao_col.sum()
+                                    break
+                        
+                        equipamentos_lavagem.append({
+                            "equipamento": int(equipamento) if pd.notna(equipamento) else 0,
+                            "intervalos": intervalos_equip,
+                            "tempo_total_horas": tempo_total_equip,
+                            "detalhes": dados_equip.to_dict('records')
+                        })
+                        
+                        total_intervalos += intervalos_equip
+                        tempo_total_global += tempo_total_equip
+                        
+                        print(f"    🚜 Equipamento {equipamento}: {intervalos_equip} intervalos, {tempo_total_equip:.2f}h total")
                     
-                    equipamentos_lavagem.append({
-                        "equipamento": int(equipamento) if pd.notna(equipamento) else 0,
-                        "intervalos": intervalos_equip,
-                        "tempo_total_horas": tempo_total_equip,
-                        "detalhes": dados_equip.to_dict('records')
-                    })
-                    
-                    total_intervalos += intervalos_equip
-                    tempo_total_global += tempo_total_equip
-                    
-                    print(f"    🚜 Equipamento {equipamento}: {intervalos_equip} intervalos, {tempo_total_equip:.2f}h total")
-                
-                painel_direito["lavagem"] = {
-                    "tem_dados": True,
-                    "total_intervalos": total_intervalos,
-                    "tempo_total_horas": tempo_total_global,
-                    "equipamentos": equipamentos_lavagem
-                }
+                    painel_direito["lavagem"] = {
+                        "tem_dados": True,
+                        "total_intervalos": total_intervalos,
+                        "tempo_total_horas": tempo_total_global,
+                        "equipamentos": equipamentos_lavagem
+                    }
         else:
             print("  📋 DataFrame de lavagem vazio")
             painel_direito["lavagem"] = {
@@ -4144,21 +4161,40 @@ def calcular_painel_direito(df_lavagem, df_ofensores):
                 "equipamentos": []
             }
         
-        # 2. Processar dados de OFENSORES
+        # 2. Processar dados de OFENSORES (filtrados por frota se especificada)
         if df_ofensores is not None and not df_ofensores.empty:
-            print(f"  ⚠️ Processando {len(df_ofensores)} registros de ofensores")
+            # Filtrar por frota específica se informada
+            df_ofensores_filtrado = df_ofensores
+            if frota_especifica is not None:
+                # Filtrar ofensores que tenham relação com a frota (primeira coluna contém o número da frota)
+                def contem_frota(linha_operacao):
+                    if pd.isna(linha_operacao):
+                        return False
+                    if isinstance(linha_operacao, str):
+                        match = re.match(r'^(\d+)', str(linha_operacao))
+                        if match:
+                            return int(match.group(1)) == frota_especifica
+                    elif pd.api.types.is_numeric_dtype(type(linha_operacao)):
+                        return int(linha_operacao) == frota_especifica
+                    return False
+                
+                mask_frota = df_ofensores[df_ofensores.columns[0]].apply(contem_frota)
+                df_ofensores_filtrado = df_ofensores[mask_frota]
+                print(f"  ⚠️ Processando ofensores para frota {frota_especifica}: {len(df_ofensores_filtrado)} registros")
+            else:
+                print(f"  ⚠️ Processando {len(df_ofensores)} registros de ofensores (todos)")
             
-            colunas_ofensores = df_ofensores.columns.tolist()
+            colunas_ofensores = df_ofensores_filtrado.columns.tolist()
             print(f"  📊 Colunas de ofensores: {colunas_ofensores}")
             
             # Converter dados de ofensores
             ofensores_lista = []
-            for idx, linha in df_ofensores.iterrows():
+            for idx, linha in df_ofensores_filtrado.iterrows():
                 ofensor = {}
                 
                 # Processar primeira coluna (pode ser equipamento ou operação)
                 primeira_coluna = linha.iloc[0]
-                primeira_col_nome = df_ofensores.columns[0].lower().replace(' ', '_').replace('(', '').replace(')', '').replace('%', 'pct')
+                primeira_col_nome = df_ofensores_filtrado.columns[0].lower().replace(' ', '_').replace('(', '').replace(')', '').replace('%', 'pct')
                 
                 if pd.notna(primeira_coluna):
                     # Tentar extrair número da primeira coluna se for string
@@ -4181,7 +4217,7 @@ def calcular_painel_direito(df_lavagem, df_ofensores):
                     ofensor[primeira_col_nome] = ""
                 
                 # Mapear outras colunas dinamicamente
-                for i, col in enumerate(df_ofensores.columns[1:], 1):
+                for i, col in enumerate(df_ofensores_filtrado.columns[1:], 1):
                     if i < len(linha):
                         valor = linha.iloc[i]
                         # Converter nome da coluna para snake_case
@@ -4203,14 +4239,15 @@ def calcular_painel_direito(df_lavagem, df_ofensores):
                             ofensor[nome_campo] = 0
                 
                 ofensores_lista.append(ofensor)
-                print(f"    ⚠️ Ofensor {idx+1}: Equipamento {ofensor['equipamento']}, Dados: {primeira_coluna}")
+                print(f"    ⚠️ Ofensor {len(ofensores_lista)}: Equipamento {ofensor['equipamento']}, Dados: {primeira_coluna}")
             
             painel_direito["ofensores"] = ofensores_lista
         else:
             print("  📋 DataFrame de ofensores vazio")
             painel_direito["ofensores"] = []
         
-        print(f"✅ Painel direito calculado:")
+        frota_info = f" (frota {frota_especifica})" if frota_especifica else " (global)"
+        print(f"✅ Painel direito calculado{frota_info}:")
         print(f"   🧽 Lavagem: {painel_direito['lavagem']['total_intervalos']} intervalos, {painel_direito['lavagem']['tempo_total_horas']:.2f}h")
         print(f"   ⚠️ Ofensores: {len(painel_direito['ofensores'])} registros")
         
@@ -4299,15 +4336,17 @@ def converter_chaves_snake_case(dados_dict):
     
     return dados_convertidos
 
-def enviar_dados_supabase(df_parametros, df_painel_esquerdo, dados_painel_direito, caminho_arquivo):
+def enviar_dados_supabase(df_parametros, df_painel_esquerdo, df_lavagem, df_ofensores, caminho_arquivo):
     """
     Envia dados completos (parâmetros médios, painel esquerdo e painel direito) para a tabela do Supabase.
     Cria um registro separado para cada frota com UUID único e chaves em snake_case.
+    Calcula dados do painel direito individualmente por frota.
     
     Args:
         df_parametros (DataFrame): DataFrame com os parâmetros médios
         df_painel_esquerdo (DataFrame): DataFrame com dados do painel esquerdo
-        dados_painel_direito (dict): Dados do painel direito (lavagem e ofensores)
+        df_lavagem (DataFrame): DataFrame com dados de lavagem
+        df_ofensores (DataFrame): DataFrame com dados de ofensores
         caminho_arquivo (str): Caminho do arquivo processado para extrair metadata
     """
     try:
@@ -4358,6 +4397,17 @@ def enviar_dados_supabase(df_parametros, df_painel_esquerdo, dados_painel_direit
                     if not linha_painel.empty:
                         painel_esquerdo_frota = linha_painel.iloc[0].to_dict()
                 
+                # Calcular dados do painel direito específicos para esta frota
+                try:
+                    dados_painel_direito_frota = calcular_painel_direito_por_frota(df_lavagem, df_ofensores, frota_especifica=frota)
+                    print(f"      📊 Painel direito calculado para frota {frota}")
+                except Exception as e:
+                    print(f"      ⚠️ Erro ao calcular painel direito para frota {frota}: {e}")
+                    dados_painel_direito_frota = {
+                        "lavagem": {"tem_dados": False, "total_intervalos": 0, "tempo_total_horas": 0, "equipamentos": []},
+                        "ofensores": []
+                    }
+                
                 # Dados para UPSERT (inserir ou atualizar) baseado na chave primária
                 dados_registro = {
                     "data_dia": data_dia,
@@ -4365,7 +4415,7 @@ def enviar_dados_supabase(df_parametros, df_painel_esquerdo, dados_painel_direit
                     "maquina_id": maquina_id,
                     "parametros_medios": [parametros_frota],  # Array com um registro da frota
                     "painel_esquerdo": painel_esquerdo_frota,  # Dados do painel esquerdo
-                    "painel_direito": dados_painel_direito,  # Dados do painel direito (lavagem e ofensores)
+                    "painel_direito": dados_painel_direito_frota,  # Dados do painel direito específicos da frota
                     "updated_at": datetime.now().isoformat()
                 }
                 
@@ -4393,7 +4443,7 @@ def enviar_dados_supabase(df_parametros, df_painel_esquerdo, dados_painel_direit
                     dados_update = {
                         "parametros_medios": dados_registro["parametros_medios"],
                         "painel_esquerdo": dados_registro["painel_esquerdo"],
-                        "painel_direito": dados_registro["painel_direito"],
+                        "painel_direito": dados_registro["painel_direito"],  # Agora específico da frota
                         "updated_at": dados_registro["updated_at"]
                     }
                     
