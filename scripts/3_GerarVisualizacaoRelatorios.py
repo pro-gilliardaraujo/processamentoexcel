@@ -243,6 +243,8 @@ def plot_gantt(df: pd.DataFrame, equipamento: Optional[str] = None, data: Option
 
     # Legenda (horizontal)
     legend_elems = [Patch(facecolor=c, label=t) for t, c in CONFIG['COLORS'].items()]
+    # Adiciona entrada de legenda para faltas de informação
+    legend_elems.append(Patch(facecolor='#FFFFFF', edgecolor='black', label='Falta de Informação'))
     legend_y = CONFIG.get('LEGEND_Y', 1.08)
     ax.legend(handles=legend_elems, loc='upper center', bbox_to_anchor=(0.5, legend_y),
               ncol=len(legend_elems), frameon=False, fontsize=9)

@@ -619,88 +619,138 @@ def calcular_horas_por_frota(df):
 
 def calcular_motor_ocioso(base_calculo, df_base):
     """
-    Calcula o percentual de motor ocioso por operador usando os dados da Base Calculo.
-    Agrega os dados por operador, calculando a média quando um operador aparece em múltiplas frotas.
+    Calcula o percentual de motor ocioso por operador de forma correta.
+    Calcula os totais do operador e divide pelos dias únicos trabalhados.
     
     Regras de cálculo (Método Avançado):
-    1. Existe uma tolerância de 1 minuto para operações de "Parada com motor ligado" (valor 1)
-    2. Se uma operação tem "Parada com motor ligado = 1" e dura menos de 1 minuto, ela é desconsiderada se:
-       - A próxima operação tem "Parada com motor ligado = 0" e dura mais de 1 minuto
-    3. Se existem duas ou mais operações com "Parada com motor ligado = 1" em sequência (ou com outras operações entre elas que duram menos de 1 minuto):
-       - Somamos o tempo total dessas operações
-       - Subtraímos 1 minuto do total
+    1. Soma total de Motor Ocioso do operador (todas as frotas)
+    2. Soma total de Motor Ligado do operador (todas as frotas)  
+    3. Divide ambos pelos dias únicos trabalhados pelo operador
+    4. Calcula a porcentagem correta
     
     Args:
         base_calculo (DataFrame): Tabela Base Calculo
-        df_base (DataFrame): DataFrame base para aplicar filtros de operações
+        df_base (DataFrame): DataFrame base para cálculo correto
     
     Returns:
-        DataFrame: Percentual de motor ocioso por operador (agregado)
+        DataFrame: Percentual de motor ocioso por operador (cálculo correto)
     """
-    # Agrupar por operador e usar os valores já calculados na Base Calculo
-    agrupado = base_calculo.groupby('Operador').agg({
-        'Motor Ligado': 'sum',
-        'Parado Com Motor Ligado': 'sum'
-    }).reset_index()
+    # Filtrar operadores excluídos do df_base
+    df_filtrado = df_base[~df_base['Operador'].isin(OPERADORES_EXCLUIR)]
     
     resultados = []
-    print("\n=== DETALHAMENTO DO CÁLCULO DE MOTOR OCIOSO (MÉTODO AVANÇADO) ===")
-    print("Utilizando valores da coluna Motor Ocioso calculados com a lógica de intervalos e tolerância")
-    print("=" * 60)
+    operadores_unicos = base_calculo['Operador'].unique()
+    
+    print("\n=== DETALHAMENTO DO CÁLCULO DE MOTOR OCIOSO (MÉTODO AVANÇADO - CORRIGIDO) ===")
+    print("Calculando médias diárias corretas por operador (não somando médias de frotas diferentes)")
+    print("=" * 80)
 
-    for _, row in agrupado.iterrows():
-        operador = row['Operador']
-        tempo_ligado = row['Motor Ligado']
-        tempo_ocioso = row['Parado Com Motor Ligado']
-
-        # Determinar frotas associadas a este operador
-        if df_base is not None and 'Equipamento' in df_base.columns:
-            frotas = sorted(df_base[df_base['Operador'] == operador]['Equipamento'].astype(str).unique())
+    for operador in operadores_unicos:
+        # Para recalcular corretamente, vamos aos dados originais
+        dados_operador = df_filtrado[df_filtrado['Operador'] == operador]
+        registros_operador = base_calculo[base_calculo['Operador'] == operador]
+        
+        if len(dados_operador) > 0:
+            # Calcular totais do operador
+            total_motor_ligado = dados_operador[
+                dados_operador['Motor Ligado'] == 1
+            ]['Diferença_Hora'].sum()
+            
+            total_motor_ocioso = dados_operador['Motor Ocioso'].sum()
+            
+            # Calcular número de dias únicos
+            dias_unicos_operador = dados_operador['Data'].nunique() if 'Data' in dados_operador.columns else 1
+            
+            # Calcular médias diárias corretas
+            tempo_ligado_media = total_motor_ligado / dias_unicos_operador if dias_unicos_operador > 0 else 0
+            tempo_ocioso_media = total_motor_ocioso / dias_unicos_operador if dias_unicos_operador > 0 else 0
         else:
-            frotas = sorted(base_calculo[base_calculo['Operador'] == operador]['Equipamento'].astype(str).unique())
+            # Fallback: usar os valores da base_calculo (método antigo)
+            tempo_ligado_media = registros_operador['Motor Ligado'].sum()
+            tempo_ocioso_media = registros_operador['Parado Com Motor Ligado'].sum()
+        
+        # Determinar frotas associadas a este operador
+        frotas = sorted(registros_operador['Equipamento'].astype(str).unique())
         operador_nome = f"{operador} ({', '.join(frotas)})" if frotas else operador
         
         # Calcular porcentagem de tempo ocioso
-        porcentagem = tempo_ocioso / tempo_ligado if tempo_ligado > 0 else 0
+        porcentagem = tempo_ocioso_media / tempo_ligado_media if tempo_ligado_media > 0 else 0
         
         print(f"\nOperador: {operador_nome}")
-        print(f"Tempo Ocioso (método avançado) = {tempo_ocioso:.6f} horas")
-        print(f"Tempo Ligado = {tempo_ligado:.6f} horas")
+        if len(dados_operador) > 0:
+            print(f"Dias únicos trabalhados: {dias_unicos_operador}")
+            print(f"Total Motor Ligado: {total_motor_ligado:.6f} -> Média diária: {tempo_ligado_media:.6f}")
+            print(f"Total Motor Ocioso: {total_motor_ocioso:.6f} -> Média diária: {tempo_ocioso_media:.6f}")
+        else:
+            print(f"Usando valores da Base Calculo (fallback)")
+            print(f"Tempo Ligado (média): {tempo_ligado_media:.6f}")
+            print(f"Tempo Ocioso (média): {tempo_ocioso_media:.6f}")
         print(f"Porcentagem = {porcentagem:.6f} ({porcentagem*100:.2f}%)")
-        print("-" * 60)
+        print("-" * 80)
         
         resultados.append({
             'Operador': operador_nome,
             'Porcentagem': porcentagem,
-            'Tempo Ligado': tempo_ligado,
-            'Tempo Ocioso': tempo_ocioso
+            'Tempo Ligado': tempo_ligado_media,
+            'Tempo Ocioso': tempo_ocioso_media
         })
     
     return pd.DataFrame(resultados)
 
-def calcular_eficiencia_energetica(base_calculo):
+def calcular_eficiencia_energetica(base_calculo, df_base):
     """
-    Calcula a eficiência energética por operador usando os dados da Base Calculo.
-    Agrega os dados por operador, calculando a média ponderada quando um operador aparece em múltiplas frotas.
+    Calcula a eficiência energética por operador de forma correta.
+    Calcula total de horas elevador / total motor ligado, ambos divididos pelos dias únicos.
     
     Args:
         base_calculo (DataFrame): Tabela Base Calculo
+        df_base (DataFrame): DataFrame base para cálculo correto
     
     Returns:
-        DataFrame: Eficiência energética por operador (agregado)
+        DataFrame: Eficiência energética por operador (cálculo correto)
     """
-    # Agrupar por operador e calcular a média ponderada
-    agrupado = base_calculo.groupby('Operador').agg({
-        'Horas elevador': 'sum',
-        'Motor Ligado': 'sum'
-    }).reset_index()
+    # Filtrar operadores excluídos do df_base
+    df_filtrado = df_base[~df_base['Operador'].isin(OPERADORES_EXCLUIR)]
     
     resultados = []
-    for _, row in agrupado.iterrows():
-        operador = row['Operador']
-        eficiencia = row['Horas elevador'] / row['Motor Ligado'] if row['Motor Ligado'] > 0 else 0
-        frotas = sorted(base_calculo[base_calculo['Operador'] == operador]['Equipamento'].astype(str).unique())
+    operadores_unicos = base_calculo['Operador'].unique()
+    
+    for operador in operadores_unicos:
+        # Para recalcular corretamente, vamos aos dados originais
+        dados_operador = df_filtrado[df_filtrado['Operador'] == operador]
+        registros_operador = base_calculo[base_calculo['Operador'] == operador]
+        
+        if len(dados_operador) > 0:
+            # Calcular total de horas elevador
+            total_horas_elevador = dados_operador[
+                (dados_operador['Esteira Ligada'] == 1) & 
+                (dados_operador['Pressao de Corte'] > 400)
+            ]['Diferença_Hora'].sum()
+            
+            # Calcular total motor ligado
+            total_motor_ligado = dados_operador[
+                dados_operador['Motor Ligado'] == 1
+            ]['Diferença_Hora'].sum()
+            
+            # Calcular número de dias únicos
+            dias_unicos_operador = dados_operador['Data'].nunique() if 'Data' in dados_operador.columns else 1
+            
+            # Calcular médias diárias
+            horas_elevador_media = total_horas_elevador / dias_unicos_operador if dias_unicos_operador > 0 else 0
+            motor_ligado_media = total_motor_ligado / dias_unicos_operador if dias_unicos_operador > 0 else 0
+            
+            # Calcular eficiência
+            eficiencia = horas_elevador_media / motor_ligado_media if motor_ligado_media > 0 else 0
+        else:
+            # Fallback: usar os valores da base_calculo
+            horas_elevador_soma = registros_operador['Horas elevador'].sum()
+            motor_ligado_soma = registros_operador['Motor Ligado'].sum()
+            eficiencia = horas_elevador_soma / motor_ligado_soma if motor_ligado_soma > 0 else 0
+        
+        # Obter frotas do operador
+        frotas = sorted(registros_operador['Equipamento'].astype(str).unique())
         operador_nome = f"{operador} ({', '.join(frotas)})" if frotas else operador
+        
         resultados.append({
             'Operador': operador_nome,
             'Eficiência': eficiencia
@@ -710,55 +760,113 @@ def calcular_eficiencia_energetica(base_calculo):
 
 def calcular_hora_elevador(df_base, base_calculo):
     """
-    Extrai as horas de elevador da Base Calculo.
-    Agrega os dados por operador, somando quando um operador aparece em múltiplas frotas.
+    Calcula as horas de elevador por operador de forma correta.
+    Soma o total de horas de elevador do operador e divide pelos dias únicos trabalhados.
     
     Args:
-        df_base: Não usado mais, mantido para compatibilidade
+        df_base (DataFrame): DataFrame base para calcular os dias únicos por operador
         base_calculo (DataFrame): Tabela Base Calculo
     
     Returns:
-        DataFrame: Horas de elevador por operador (agregado)
+        DataFrame: Horas de elevador por operador (média diária correta)
     """
-    # Agrupar por operador e somar as horas
-    agrupado = base_calculo.groupby('Operador')['Horas elevador'].sum().reset_index()
+    # Filtrar operadores excluídos do df_base
+    df_filtrado = df_base[~df_base['Operador'].isin(OPERADORES_EXCLUIR)]
     
     resultados = []
-    for _, row in agrupado.iterrows():
-        operador = row['Operador']
-        frotas = sorted(base_calculo[base_calculo['Operador'] == operador]['Equipamento'].astype(str).unique())
+    operadores_unicos = base_calculo['Operador'].unique()
+    
+    for operador in operadores_unicos:
+        # Calcular total de horas de elevador do operador (soma de todas as frotas)
+        # Multiplicar pela base_calculo para obter o total antes da divisão por dias
+        registros_operador = base_calculo[base_calculo['Operador'] == operador]
+        
+        # Para recalcular corretamente, vamos aos dados originais
+        dados_operador = df_filtrado[df_filtrado['Operador'] == operador]
+        
+        if len(dados_operador) > 0:
+            # Calcular total de horas elevador do operador de todos os dias e frotas
+            total_horas_elevador = dados_operador[
+                (dados_operador['Esteira Ligada'] == 1) & 
+                (dados_operador['Pressao de Corte'] > 400)
+            ]['Diferença_Hora'].sum()
+            
+            # Calcular número de dias únicos que o operador trabalhou (todas as frotas)
+            dias_unicos_operador = dados_operador['Data'].nunique() if 'Data' in dados_operador.columns else 1
+            
+            # Calcular média diária correta
+            horas_elevador_media = total_horas_elevador / dias_unicos_operador if dias_unicos_operador > 0 else 0
+        else:
+            # Fallback: usar a soma da base_calculo (método antigo)
+            horas_elevador_media = registros_operador['Horas elevador'].sum()
+        
+        # Obter frotas do operador
+        frotas = sorted(registros_operador['Equipamento'].astype(str).unique())
         operador_nome = f"{operador} ({', '.join(frotas)})" if frotas else operador
+        
         resultados.append({
             'Operador': operador_nome,
-            'Horas': row['Horas elevador']
+            'Horas': horas_elevador_media
         })
     
     return pd.DataFrame(resultados)
 
 def calcular_uso_gps(df_base, base_calculo):
     """
-    Extrai o uso de GPS da Base Calculo.
-    Agrega os dados por operador, calculando a média ponderada quando um operador aparece em múltiplas frotas.
+    Calcula o uso de GPS por operador de forma correta.
+    Calcula total RTK / total horas produtivas, ambos divididos pelos dias únicos.
     
     Args:
-        df_base: Não usado mais, mantido para compatibilidade
+        df_base (DataFrame): DataFrame base para cálculo correto
         base_calculo (DataFrame): Tabela Base Calculo
     
     Returns:
-        DataFrame: Percentual de uso de GPS por operador (agregado)
+        DataFrame: Percentual de uso de GPS por operador (cálculo correto)
     """
-    # Agrupar por operador e calcular a média ponderada
-    agrupado = base_calculo.groupby('Operador').agg({
-        'RTK': 'sum',
-        'Horas Produtivas': 'sum'
-    }).reset_index()
+    # Filtrar operadores excluídos do df_base
+    df_filtrado = df_base[~df_base['Operador'].isin(OPERADORES_EXCLUIR)]
     
     resultados = []
-    for _, row in agrupado.iterrows():
-        operador = row['Operador']
-        porcentagem = row['RTK'] / row['Horas Produtivas'] if row['Horas Produtivas'] > 0 else 0
-        frotas = sorted(base_calculo[base_calculo['Operador'] == operador]['Equipamento'].astype(str).unique())
+    operadores_unicos = base_calculo['Operador'].unique()
+    
+    for operador in operadores_unicos:
+        # Para recalcular corretamente, vamos aos dados originais
+        dados_operador = df_filtrado[df_filtrado['Operador'] == operador]
+        registros_operador = base_calculo[base_calculo['Operador'] == operador]
+        
+        if len(dados_operador) > 0:
+            # Calcular total RTK
+            total_rtk = dados_operador[
+                (dados_operador['Grupo Operacao'] == 'Produtiva') &
+                (dados_operador['Pressao de Corte'] >= 400) &
+                (dados_operador['RTK (Piloto Automatico)'] == 1) &
+                (dados_operador['Esteira Ligada'] == 1)
+            ]['Diferença_Hora'].sum()
+            
+            # Calcular total horas produtivas
+            total_horas_produtivas = dados_operador[
+                dados_operador['Grupo Operacao'] == 'Produtiva'
+            ]['Diferença_Hora'].sum()
+            
+            # Calcular número de dias únicos
+            dias_unicos_operador = dados_operador['Data'].nunique() if 'Data' in dados_operador.columns else 1
+            
+            # Calcular médias diárias
+            rtk_media = total_rtk / dias_unicos_operador if dias_unicos_operador > 0 else 0
+            horas_produtivas_media = total_horas_produtivas / dias_unicos_operador if dias_unicos_operador > 0 else 0
+            
+            # Calcular porcentagem
+            porcentagem = rtk_media / horas_produtivas_media if horas_produtivas_media > 0 else 0
+        else:
+            # Fallback: usar os valores da base_calculo
+            rtk_soma = registros_operador['RTK'].sum()
+            horas_produtivas_soma = registros_operador['Horas Produtivas'].sum()
+            porcentagem = rtk_soma / horas_produtivas_soma if horas_produtivas_soma > 0 else 0
+        
+        # Obter frotas do operador
+        frotas = sorted(registros_operador['Equipamento'].astype(str).unique())
         operador_nome = f"{operador} ({', '.join(frotas)})" if frotas else operador
+        
         resultados.append({
             'Operador': operador_nome,
             'Porcentagem': porcentagem
@@ -1769,7 +1877,7 @@ def processar_arquivo(caminho_arquivo, diretorio_saida):
     # Calcular as métricas auxiliares
     print("Calculando métricas auxiliares com operadores consolidados...")
     disp_mecanica = calcular_disponibilidade_mecanica(df_base)
-    eficiencia_energetica = calcular_eficiencia_energetica(base_calculo)
+    eficiencia_energetica = calcular_eficiencia_energetica(base_calculo, df_base)
     hora_elevador = calcular_hora_elevador(df_base, base_calculo)
     motor_ocioso = calcular_motor_ocioso(base_calculo, df_base)
     uso_gps = calcular_uso_gps(df_base, base_calculo)

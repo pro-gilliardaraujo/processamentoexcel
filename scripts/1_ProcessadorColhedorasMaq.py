@@ -1931,13 +1931,15 @@ def processar_arquivo_maquina(caminho_arquivo, diretorio_saida):
     # Calcular dados do painel direito (será calculado por frota individualmente no envio)
     try:
         # Manter dados globais para referência, mas calcular por frota no envio
-        dados_painel_direito_global = calcular_painel_direito_por_frota(df_lavagem, df_roletes, df_ofensores, frota_especifica=None)
+        dados_painel_direito_global = calcular_painel_direito_por_frota(df_lavagem, df_roletes, df_ofensores, frota_especifica=None, df_producao=df_producao, caminho_arquivo=caminho_arquivo)
     except Exception as e:
         print(f"⚠️ Erro ao calcular painel direito global: {e}")
         dados_painel_direito_global = {
             "lavagem": {"tem_dados": False, "total_intervalos": 0, "tempo_total_horas": 0, "equipamentos": []},
             "roletes": {"tem_dados": False, "total_intervalos": 0, "tempo_total_horas": 0, "equipamentos": []},
-            "ofensores": []
+            "ofensores": [],
+            "producao_frente": {"nome": "N/A", "toneladas_total": 0, "frotas_ativas": 0, "tem_dados": False},
+            "producao_frota": {"frota": 0, "toneladas": 0, "horas_elevador": 0, "ton_por_hora": 0, "tem_dados": False}
         }
 
     criar_excel_planilhas_reduzidas(
@@ -1967,7 +1969,7 @@ def processar_arquivo_maquina(caminho_arquivo, diretorio_saida):
         print("\n" + "="*50)
         print("📡 ENVIANDO DADOS PARA SUPABASE")
         print("="*50)
-        enviar_dados_supabase(df_parametros_medios, df_painel_esquerdo, df_lavagem, df_roletes, df_ofensores, caminho_arquivo)
+        enviar_dados_supabase(df_parametros_medios, df_painel_esquerdo, df_lavagem, df_roletes, df_ofensores, df_producao, caminho_arquivo)
     except Exception as e:
         print(f"⚠️ Erro ao enviar dados para Supabase: {e}")
         print("   Continuando processamento normalmente...")
@@ -4198,15 +4200,17 @@ def calcular_painel_esquerdo(df_base, horas_por_frota, hora_elevador, df_manobra
         print(f"❌ Erro ao calcular painel esquerdo: {e}")
         return pd.DataFrame()
 
-def calcular_painel_direito_por_frota(df_lavagem, df_roletes, df_ofensores, frota_especifica=None):
+def calcular_painel_direito_por_frota(df_lavagem, df_roletes, df_ofensores, frota_especifica=None, df_producao=None, caminho_arquivo=None):
     """
-    Calcula dados para o painel direito do dashboard (Lavagem, Roletes e Ofensores) para uma frota específica.
+    Calcula dados para o painel direito do dashboard (Lavagem, Roletes, Ofensores e Produção) para uma frota específica.
     
     Args:
         df_lavagem (DataFrame): Dados de intervalos de lavagem
         df_roletes (DataFrame): Dados de intervalos de roletes
         df_ofensores (DataFrame): Dados dos principais ofensores
         frota_especifica (int, optional): ID da frota para filtrar os dados. Se None, retorna dados globais.
+        df_producao (DataFrame, optional): Dados de produção por frota
+        caminho_arquivo (str, optional): Caminho do arquivo para identificar a frente
     
     Returns:
         dict: Dados consolidados para o painel direito da frota específica
@@ -4217,7 +4221,9 @@ def calcular_painel_direito_por_frota(df_lavagem, df_roletes, df_ofensores, frot
         painel_direito = {
             "lavagem": {},
             "roletes": {},
-            "ofensores": []
+            "ofensores": [],
+            "producao_frente": {},
+            "producao_frota": {}
         }
         
         # 1. Processar dados de LAVAGEM (filtrados por frota se especificada)
@@ -4459,11 +4465,90 @@ def calcular_painel_direito_por_frota(df_lavagem, df_roletes, df_ofensores, frot
             print("  📋 DataFrame de ofensores vazio")
             painel_direito["ofensores"] = []
         
+        # 4. Processar dados de PRODUÇÃO (frente e frota)
+        try:
+            # 4.1 Dados da FRENTE (globais - sempre os mesmos)
+            frente_nome = "N/A"
+            frente_toneladas_total = 0
+            frente_frotas_ativas = 0
+            
+            if caminho_arquivo:
+                toneladas_frente, nome_frente = obter_toneladas_por_frente(caminho_arquivo)
+                if toneladas_frente and nome_frente:
+                    frente_nome = nome_frente
+                    frente_toneladas_total = toneladas_frente
+                    if df_producao is not None and not df_producao.empty:
+                        frente_frotas_ativas = len(df_producao)
+            
+            painel_direito["producao_frente"] = {
+                "nome": frente_nome,
+                "toneladas_total": frente_toneladas_total,
+                "frotas_ativas": frente_frotas_ativas,
+                "tem_dados": frente_toneladas_total > 0
+            }
+            
+            # 4.2 Dados da FROTA específica (se especificada)
+            if frota_especifica is not None and df_producao is not None and not df_producao.empty:
+                linha_frota = df_producao[df_producao['Frota'] == frota_especifica]
+                if not linha_frota.empty:
+                    registro = linha_frota.iloc[0]
+                    painel_direito["producao_frota"] = {
+                        "frota": int(registro['Frota']),
+                        "toneladas": registro['Toneladas'],
+                        "horas_elevador": registro['Horas Elevador'],
+                        "ton_por_hora": registro['Ton/h'],
+                        "tem_dados": True
+                    }
+                    print(f"  📦 Produção frota {frota_especifica}: {registro['Toneladas']:.2f}t, {registro['Ton/h']:.2f}t/h")
+                else:
+                    painel_direito["producao_frota"] = {
+                        "frota": frota_especifica,
+                        "toneladas": 0,
+                        "horas_elevador": 0,
+                        "ton_por_hora": 0,
+                        "tem_dados": False
+                    }
+                    print(f"  📦 Produção frota {frota_especifica}: sem dados")
+            else:
+                # Para dados globais ou sem frota específica
+                if df_producao is not None and not df_producao.empty:
+                    total_toneladas = df_producao['Toneladas'].sum()
+                    total_horas = df_producao['Horas Elevador'].sum()
+                    media_ton_hora = total_toneladas / total_horas if total_horas > 0 else 0
+                    
+                    painel_direito["producao_frota"] = {
+                        "frota": 0,  # Global
+                        "toneladas": total_toneladas,
+                        "horas_elevador": total_horas,
+                        "ton_por_hora": media_ton_hora,
+                        "tem_dados": True
+                    }
+                    print(f"  📦 Produção global: {total_toneladas:.2f}t, {media_ton_hora:.2f}t/h")
+                else:
+                    painel_direito["producao_frota"] = {
+                        "frota": 0,
+                        "toneladas": 0,
+                        "horas_elevador": 0,
+                        "ton_por_hora": 0,
+                        "tem_dados": False
+                    }
+                    print("  📦 Produção: sem dados")
+            
+            if frente_nome != "N/A":
+                print(f"  🏭 Frente {frente_nome}: {frente_toneladas_total}t total, {frente_frotas_ativas} frotas")
+            
+        except Exception as e:
+            print(f"  ⚠️ Erro ao calcular produção: {e}")
+            painel_direito["producao_frente"] = {"nome": "N/A", "toneladas_total": 0, "frotas_ativas": 0, "tem_dados": False}
+            painel_direito["producao_frota"] = {"frota": 0, "toneladas": 0, "horas_elevador": 0, "ton_por_hora": 0, "tem_dados": False}
+        
         frota_info = f" (frota {frota_especifica})" if frota_especifica else " (global)"
         print(f"✅ Painel direito calculado{frota_info}:")
         print(f"   🧽 Lavagem: {painel_direito['lavagem']['total_intervalos']} intervalos, {painel_direito['lavagem']['tempo_total_horas']:.2f}h")
         print(f"   🔧 Roletes: {painel_direito['roletes']['total_intervalos']} intervalos, {painel_direito['roletes']['tempo_total_horas']:.2f}h")
         print(f"   ⚠️ Ofensores: {len(painel_direito['ofensores'])} registros")
+        print(f"   🏭 Frente: {painel_direito['producao_frente']['nome']} ({painel_direito['producao_frente']['toneladas_total']}t)")
+        print(f"   📦 Produção: {painel_direito['producao_frota']['toneladas']:.2f}t ({painel_direito['producao_frota']['ton_por_hora']:.2f}t/h)")
         
         return painel_direito
         
@@ -4472,7 +4557,9 @@ def calcular_painel_direito_por_frota(df_lavagem, df_roletes, df_ofensores, frot
         return {
             "lavagem": {"tem_dados": False, "total_intervalos": 0, "tempo_total_horas": 0, "equipamentos": []},
             "roletes": {"tem_dados": False, "total_intervalos": 0, "tempo_total_horas": 0, "equipamentos": []},
-            "ofensores": []
+            "ofensores": [],
+            "producao_frente": {"nome": "N/A", "toneladas_total": 0, "frotas_ativas": 0, "tem_dados": False},
+            "producao_frota": {"frota": 0, "toneladas": 0, "horas_elevador": 0, "ton_por_hora": 0, "tem_dados": False}
         }
 
 def extrair_info_arquivo(caminho_arquivo):
@@ -4551,7 +4638,7 @@ def converter_chaves_snake_case(dados_dict):
     
     return dados_convertidos
 
-def enviar_dados_supabase(df_parametros, df_painel_esquerdo, df_lavagem, df_roletes, df_ofensores, caminho_arquivo):
+def enviar_dados_supabase(df_parametros, df_painel_esquerdo, df_lavagem, df_roletes, df_ofensores, df_producao, caminho_arquivo):
     """
     Envia dados completos (parâmetros médios, painel esquerdo e painel direito) para a tabela do Supabase.
     Cria um registro separado para cada frota com UUID único e chaves em snake_case.
@@ -4561,7 +4648,9 @@ def enviar_dados_supabase(df_parametros, df_painel_esquerdo, df_lavagem, df_role
         df_parametros (DataFrame): DataFrame com os parâmetros médios
         df_painel_esquerdo (DataFrame): DataFrame com dados do painel esquerdo
         df_lavagem (DataFrame): DataFrame com dados de lavagem
+        df_roletes (DataFrame): DataFrame com dados de roletes
         df_ofensores (DataFrame): DataFrame com dados de ofensores
+        df_producao (DataFrame): DataFrame com dados de produção
         caminho_arquivo (str): Caminho do arquivo processado para extrair metadata
     """
     try:
@@ -4614,14 +4703,16 @@ def enviar_dados_supabase(df_parametros, df_painel_esquerdo, df_lavagem, df_role
                 
                 # Calcular dados do painel direito específicos para esta frota
                 try:
-                    dados_painel_direito_frota = calcular_painel_direito_por_frota(df_lavagem, df_roletes, df_ofensores, frota_especifica=frota)
+                    dados_painel_direito_frota = calcular_painel_direito_por_frota(df_lavagem, df_roletes, df_ofensores, frota_especifica=frota, df_producao=df_producao, caminho_arquivo=caminho_arquivo)
                     print(f"      📊 Painel direito calculado para frota {frota}")
                 except Exception as e:
                     print(f"      ⚠️ Erro ao calcular painel direito para frota {frota}: {e}")
                     dados_painel_direito_frota = {
                         "lavagem": {"tem_dados": False, "total_intervalos": 0, "tempo_total_horas": 0, "equipamentos": []},
                         "roletes": {"tem_dados": False, "total_intervalos": 0, "tempo_total_horas": 0, "equipamentos": []},
-                        "ofensores": []
+                        "ofensores": [],
+                        "producao_frente": {"nome": "N/A", "toneladas_total": 0, "frotas_ativas": 0, "tem_dados": False},
+                        "producao_frota": {"frota": 0, "toneladas": 0, "horas_elevador": 0, "ton_por_hora": 0, "tem_dados": False}
                     }
                 
                 # Dados para UPSERT (inserir ou atualizar) baseado na chave primária
