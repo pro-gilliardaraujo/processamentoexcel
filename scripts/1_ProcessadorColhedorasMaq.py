@@ -4240,9 +4240,14 @@ def calcular_painel_direito_por_frota(df_lavagem, df_roletes, df_ofensores, frot
                 }
             else:
                 # Filtrar por frota específica se informada
+                # Em lavagem, 'Equipamento' é equivalente à 'Frota'
                 df_lavagem_filtrado = df_lavagem
                 if frota_especifica is not None:
-                    df_lavagem_filtrado = df_lavagem[df_lavagem['Equipamento'] == frota_especifica]
+                    # Verificar se existe a coluna 'Frota' ou usar 'Equipamento'
+                    if 'Frota' in df_lavagem.columns:
+                        df_lavagem_filtrado = df_lavagem[df_lavagem['Frota'] == frota_especifica]
+                    else:
+                        df_lavagem_filtrado = df_lavagem[df_lavagem['Equipamento'] == frota_especifica]
                     print(f"  🧽 Processando lavagem para frota {frota_especifica}: {len(df_lavagem_filtrado)} registros")
                 else:
                     print(f"  🧽 Processando {len(df_lavagem)} registros de lavagem (todos)")
@@ -4328,9 +4333,14 @@ def calcular_painel_direito_por_frota(df_lavagem, df_roletes, df_ofensores, frot
                 }
             else:
                 # Filtrar por frota específica se informada
+                # Em roletes, 'Equipamento' é equivalente à 'Frota' 
                 df_roletes_filtrado = df_roletes
                 if frota_especifica is not None:
-                    df_roletes_filtrado = df_roletes[df_roletes['Equipamento'] == frota_especifica]
+                    # Verificar se existe a coluna 'Frota' ou usar 'Equipamento'
+                    if 'Frota' in df_roletes.columns:
+                        df_roletes_filtrado = df_roletes[df_roletes['Frota'] == frota_especifica]
+                    else:
+                        df_roletes_filtrado = df_roletes[df_roletes['Equipamento'] == frota_especifica]
                     print(f"  🔧 Processando roletes para frota {frota_especifica}: {len(df_roletes_filtrado)} registros")
                 else:
                     print(f"  🔧 Processando {len(df_roletes)} registros de roletes (todos)")
