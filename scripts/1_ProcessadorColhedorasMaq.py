@@ -3334,18 +3334,28 @@ def calcular_motor_ocioso_maquina_correto(df: pd.DataFrame) -> pd.DataFrame:
 # === NOVO: cálculo de Aferição de Roletes ===
 def calcular_roletes(df):
     """
-    Calcula os intervalos de aferição de roletes para cada equipamento, filtrando
-    a operação "9029 - MEDIR TEMPERATURA ROLETES". Lógica espelhada de
-    calcular_lavagem.
-
-    Se não houver registros, retorna DataFrame com linha informativa.
+    Calcula os intervalos de aferição de roletes para cada equipamento.
+    Identifica início, fim e duração de cada intervalo de medição de temperatura de roletes,
+    e calcula o tempo total por dia e equipamento.
+    
+    Se não houver registros de roletes, retorna um DataFrame com uma linha informativa.
+    
+    Args:
+        df (DataFrame): DataFrame com os dados
+        
+    Returns:
+        DataFrame: DataFrame com os intervalos de roletes detalhados
     """
-    print("Calculando intervalos de aferição de roletes…")
-
+    print("Calculando intervalos de aferição de roletes...")
+    
+    # Filtrar apenas registros de medição de temperatura de roletes
     df_roletes = df[df['Operacao'] == '9029 - MEDIR TEMPERATURA ROLETES'].copy()
-
+    
     if len(df_roletes) == 0:
-        print("Nenhum registro de roletes encontrado. Criando linha informativa.")
+        print("Nenhum registro de roletes encontrado.")
+        print("A planilha de Roletes será criada com uma linha informativa.")
+        
+        # Retornar DataFrame com linha informativa
         return pd.DataFrame([{
             'Data': 'N/A',
             'Equipamento': 'NÃO FORAM ENCONTRADOS DADOS DE ROLETES PARA A DATA INFORMADA',
@@ -3355,62 +3365,105 @@ def calcular_roletes(df):
             'Duração (horas)': 0,
             'Tempo Total do Dia': 0
         }])
-
-    # Mesma lógica de cálculo de intervalos contínuos
+    
+    print(f"Encontrados {len(df_roletes)} registros de aferição de roletes.")
+    
+    # Garantir que as colunas necessárias existam
     colunas_necessarias = ['Equipamento', 'Data', 'Hora', 'Diferença_Hora']
     for coluna in colunas_necessarias:
         if coluna not in df_roletes.columns:
             print(f"Coluna '{coluna}' não encontrada nos dados de roletes.")
             return pd.DataFrame(columns=[
-                'Data', 'Equipamento', 'Intervalo', 'Início', 'Fim',
+                'Data', 'Equipamento', 'Intervalo', 'Início', 'Fim', 
                 'Duração (horas)', 'Tempo Total do Dia'
             ])
-
+    
+    # Ordenar por equipamento, data e hora
     df_roletes = df_roletes.sort_values(['Equipamento', 'Data', 'Hora'])
-
+    
     resultados = []
+    
+    # Agrupar por equipamento e data
     for (equipamento, data), grupo in df_roletes.groupby(['Equipamento', 'Data']):
+        print(f"Processando roletes: {equipamento} - {data}")
+        
+        # Resetar índices para facilitar a iteração
         grupo = grupo.reset_index(drop=True)
+        
+        # Identificar intervalos contínuos de aferição de roletes
+        intervalos = []
         inicio_intervalo = None
         fim_intervalo = None
         duracao_intervalo = 0
+        
         for i in range(len(grupo)):
             registro = grupo.iloc[i]
+            
+            # Converter hora string para datetime para comparação
             hora_atual = pd.to_datetime(registro['Hora'], format='%H:%M:%S')
-            if (inicio_intervalo is None or (i > 0 and (hora_atual - pd.to_datetime(grupo.iloc[i-1]['Hora'], format='%H:%M:%S')).total_seconds() > 1800)):
+            
+            # Se é o primeiro registro ou se houve uma pausa longa (> 30 minutos)
+            if (inicio_intervalo is None or 
+                (i > 0 and (hora_atual - pd.to_datetime(grupo.iloc[i-1]['Hora'], format='%H:%M:%S')).total_seconds() > 1800)):
+                
+                # Finalizar intervalo anterior se existir
                 if inicio_intervalo is not None:
-                    resultados.append({
-                        'Data': data,
-                        'Equipamento': equipamento,
-                        'Intervalo': f"Intervalo {len([r for r in resultados if r['Equipamento']==equipamento and r['Data']==data])+1}",
-                        'Início': inicio_intervalo,
-                        'Fim': fim_intervalo,
-                        'Duração (horas)': round(duracao_intervalo,4),
-                        'Tempo Total do Dia': 0  # preencher depois
+                    intervalos.append({
+                        'inicio': inicio_intervalo,
+                        'fim': fim_intervalo,
+                        'duracao': duracao_intervalo
                     })
+                
+                # Iniciar novo intervalo
                 inicio_intervalo = registro['Hora']
                 duracao_intervalo = 0
+            
+            # Atualizar fim do intervalo atual e somar duração
             fim_intervalo = registro['Hora']
             duracao_intervalo += registro['Diferença_Hora']
-
-        # push último intervalo
+        
+        # Não esquecer do último intervalo
         if inicio_intervalo is not None:
+            intervalos.append({
+                'inicio': inicio_intervalo,
+                'fim': fim_intervalo,
+                'duracao': duracao_intervalo
+            })
+        
+        # Converter intervalos para o formato final
+        for idx, intervalo in enumerate(intervalos, 1):
             resultados.append({
                 'Data': data,
                 'Equipamento': equipamento,
-                'Intervalo': f"Intervalo {len([r for r in resultados if r['Equipamento']==equipamento and r['Data']==data])+1}",
-                'Início': inicio_intervalo,
-                'Fim': fim_intervalo,
-                'Duração (horas)': round(duracao_intervalo,4),
-                'Tempo Total do Dia': 0
+                'Intervalo': idx,
+                'Início': intervalo['inicio'],
+                'Fim': intervalo['fim'],
+                'Duração (horas)': round(intervalo['duracao'], 4),
+                'Tempo Total do Dia': 0  # Será calculado depois
             })
-
-    # Calcular tempo total por equipamento/dia
-    df_result = pd.DataFrame(resultados)
-    if not df_result.empty:
-        df_result['Tempo Total do Dia'] = df_result.groupby(['Equipamento','Data'])['Duração (horas)'].transform('sum')
-    print(f"Processamento de roletes concluído. {len(df_result)} intervalos identificados.")
-    return df_result
+    
+    print(f"Processamento de roletes concluído. {len(resultados)} intervalos identificados.")
+    
+    # Converter para DataFrame
+    if resultados:
+        resultado_df = pd.DataFrame(resultados)
+        
+        # Calcular tempo total por equipamento e data
+        tempo_total_por_equipamento = resultado_df.groupby(['Equipamento', 'Data'])['Duração (horas)'].sum().reset_index()
+        tempo_total_por_equipamento.rename(columns={'Duração (horas)': 'Tempo Total do Dia'}, inplace=True)
+        
+        # Fazer merge para adicionar o tempo total do dia
+        resultado_df = resultado_df.merge(tempo_total_por_equipamento, on=['Equipamento', 'Data'], suffixes=('', '_total'))
+        resultado_df['Tempo Total do Dia'] = resultado_df['Tempo Total do Dia_total']
+        resultado_df.drop(columns=['Tempo Total do Dia_total'], inplace=True)
+        
+        return resultado_df
+    else:
+        # Retornar DataFrame vazio com as colunas corretas
+        return pd.DataFrame(columns=[
+            'Data', 'Equipamento', 'Intervalo', 'Início', 'Fim', 
+            'Duração (horas)', 'Tempo Total do Dia'
+        ])
 
 
 def calcular_parametros_medios(df_base, uso_gps, hora_elevador, velocidade_media_produtiva):
@@ -4053,12 +4106,13 @@ def calcular_painel_esquerdo(df_base, horas_por_frota, hora_elevador, df_manobra
         print(f"❌ Erro ao calcular painel esquerdo: {e}")
         return pd.DataFrame()
 
-def calcular_painel_direito_por_frota(df_lavagem, df_ofensores, frota_especifica=None):
+def calcular_painel_direito_por_frota(df_lavagem, df_roletes, df_ofensores, frota_especifica=None):
     """
-    Calcula dados para o painel direito do dashboard (Lavagem e Ofensores) para uma frota específica.
+    Calcula dados para o painel direito do dashboard (Lavagem, Roletes e Ofensores) para uma frota específica.
     
     Args:
         df_lavagem (DataFrame): Dados de intervalos de lavagem
+        df_roletes (DataFrame): Dados de intervalos de roletes
         df_ofensores (DataFrame): Dados dos principais ofensores
         frota_especifica (int, optional): ID da frota para filtrar os dados. Se None, retorna dados globais.
     
@@ -4070,6 +4124,7 @@ def calcular_painel_direito_por_frota(df_lavagem, df_ofensores, frota_especifica
         
         painel_direito = {
             "lavagem": {},
+            "roletes": {},
             "ofensores": []
         }
         
@@ -4161,26 +4216,13 @@ def calcular_painel_direito_por_frota(df_lavagem, df_ofensores, frota_especifica
                 "equipamentos": []
             }
         
-        # 2. Processar dados de OFENSORES (filtrados por frota se especificada)
+        # 2. Processar dados de OFENSORES (usar dados da planilha como estão)
         if df_ofensores is not None and not df_ofensores.empty:
-            # Filtrar por frota específica se informada
+            # Os ofensores já vêm processados da planilha, usar todos os dados
             df_ofensores_filtrado = df_ofensores
+            
             if frota_especifica is not None:
-                # Filtrar ofensores que tenham relação com a frota (primeira coluna contém o número da frota)
-                def contem_frota(linha_operacao):
-                    if pd.isna(linha_operacao):
-                        return False
-                    if isinstance(linha_operacao, str):
-                        match = re.match(r'^(\d+)', str(linha_operacao))
-                        if match:
-                            return int(match.group(1)) == frota_especifica
-                    elif pd.api.types.is_numeric_dtype(type(linha_operacao)):
-                        return int(linha_operacao) == frota_especifica
-                    return False
-                
-                mask_frota = df_ofensores[df_ofensores.columns[0]].apply(contem_frota)
-                df_ofensores_filtrado = df_ofensores[mask_frota]
-                print(f"  ⚠️ Processando ofensores para frota {frota_especifica}: {len(df_ofensores_filtrado)} registros")
+                print(f"  ⚠️ Processando ofensores para frota {frota_especifica}: {len(df_ofensores)} registros")
             else:
                 print(f"  ⚠️ Processando {len(df_ofensores)} registros de ofensores (todos)")
             
