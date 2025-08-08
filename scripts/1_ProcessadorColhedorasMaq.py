@@ -1678,12 +1678,12 @@ def criar_excel_com_planilhas(df_base, disp_mecanica, eficiencia_energetica, vel
             elif sheet_name == 'Ofensores':
                 if df_ofensores is not None and not df_ofensores.empty:
                     for row in range(2, worksheet.max_row + 1):
-                        # Coluna B (Tempo)
-                        cell = worksheet.cell(row=row, column=2)
-                        cell.number_format = '0.00'  # Formato decimal
-                        
-                        # Coluna C (Porcentagem)
+                        # Coluna C (Tempo) - nova estrutura: Frota | Operação | Tempo | Porcentagem
                         cell = worksheet.cell(row=row, column=3)
+                        cell.number_format = '0.00'  # Formato decimal para tempo
+                        
+                        # Coluna D (Porcentagem)
+                        cell = worksheet.cell(row=row, column=4)
                         cell.number_format = '0.00%'  # Formato percentual
             
 
@@ -2628,10 +2628,10 @@ def criar_excel_planilhas_reduzidas(df_base, disp_mecanica, velocidade_media_pro
             elif sh_name == 'Ofensores':
                 if df_ofensores is not None and not df_ofensores.empty:
                     for row in range(2, ws.max_row + 1):
-                        # Coluna B (Tempo)
-                        ws.cell(row=row, column=2).number_format = '0.00'  # Formato decimal
-                        # Coluna C (Porcentagem)
-                        ws.cell(row=row, column=3).number_format = '0.00%'  # Formato percentual
+                        # Coluna C (Tempo) - nova estrutura: Frota | Operação | Tempo | Porcentagem
+                        ws.cell(row=row, column=3).number_format = '0.00'  # Formato decimal para tempo
+                        # Coluna D (Porcentagem)
+                        ws.cell(row=row, column=4).number_format = '0.00%'  # Formato percentual
             
             elif sh_name == 'Lavagem':
                 if df_lavagem is not None:
@@ -4141,7 +4141,36 @@ def calcular_painel_esquerdo(df_base, horas_por_frota, hora_elevador, df_manobra
             dados_frota["disponibilidade_mecanica"] = disponibilidade_pct
             dados_frota["tempo_manutencao"] = tempo_manutencao
             
-            # 7. Operadores
+            # 7. Motor Ocioso (calcular a partir dos dados base)
+            tempo_ocioso = 0
+            porcentagem_ociosa = 0
+            try:
+                # Calcular motor ocioso para esta frota específica
+                df_frota = df_base[df_base['Equipamento'] == frota] if not df_base.empty else pd.DataFrame()
+                if not df_frota.empty:
+                    # Primeiro calcular a coluna Motor Ocioso Correto se não existir
+                    if 'Motor Ocioso Correto' not in df_frota.columns:
+                        df_frota = df_frota.copy()
+                        df_frota = calcular_motor_ocioso_correto(df_frota)
+                    
+                    motor_ocioso_frota = calcular_motor_ocioso_maquina_correto(df_frota)
+                    if not motor_ocioso_frota.empty:
+                        linha_motor = motor_ocioso_frota[motor_ocioso_frota['Frota'] == frota]
+                        if not linha_motor.empty:
+                            tempo_ocioso = pd.to_numeric(linha_motor['Tempo Ocioso'].iloc[0], errors='coerce') or 0
+                            porcentagem_ociosa = pd.to_numeric(linha_motor['Porcentagem'].iloc[0], errors='coerce') or 0
+                            # Se porcentagem está em decimal (0-1), converter para percentual
+                            if 0 <= porcentagem_ociosa <= 1:
+                                porcentagem_ociosa *= 100
+            except Exception as e:
+                print(f"    ⚠️ Erro ao calcular motor ocioso para frota {frota}: {e}")
+                tempo_ocioso = 0
+                porcentagem_ociosa = 0
+            
+            dados_frota["tempo_ocioso"] = tempo_ocioso
+            dados_frota["porcentagem_ociosa"] = porcentagem_ociosa
+            
+            # 8. Operadores
             operadores_lista = []
             if not df_operadores.empty:
                 linhas_frota = df_operadores[df_operadores.iloc[:, 0] == frota]
