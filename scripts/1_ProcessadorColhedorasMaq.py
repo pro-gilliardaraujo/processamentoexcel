@@ -1967,7 +1967,7 @@ def processar_arquivo_maquina(caminho_arquivo, diretorio_saida):
         print("\n" + "="*50)
         print("📡 ENVIANDO DADOS PARA SUPABASE")
         print("="*50)
-        enviar_dados_supabase(df_parametros_medios, df_painel_esquerdo, df_lavagem, df_ofensores, caminho_arquivo)
+        enviar_dados_supabase(df_parametros_medios, df_painel_esquerdo, df_lavagem, df_roletes, df_ofensores, caminho_arquivo)
     except Exception as e:
         print(f"⚠️ Erro ao enviar dados para Supabase: {e}")
         print("   Continuando processamento normalmente...")
@@ -4551,7 +4551,7 @@ def converter_chaves_snake_case(dados_dict):
     
     return dados_convertidos
 
-def enviar_dados_supabase(df_parametros, df_painel_esquerdo, df_lavagem, df_ofensores, caminho_arquivo):
+def enviar_dados_supabase(df_parametros, df_painel_esquerdo, df_lavagem, df_roletes, df_ofensores, caminho_arquivo):
     """
     Envia dados completos (parâmetros médios, painel esquerdo e painel direito) para a tabela do Supabase.
     Cria um registro separado para cada frota com UUID único e chaves em snake_case.
