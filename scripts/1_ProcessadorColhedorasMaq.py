@@ -1244,6 +1244,68 @@ def calcular_ofensores(df):
     
     return resultado
 
+def calcular_ofensores_por_frota(df):
+    """
+    Calcula os top 5 ofensores por frota individual.
+    Filtra Estado Operacional = 'PARADA' que não são produtivas,
+    agrupa por Frota + Operacao, calcula tempo e porcentagem por frota.
+    
+    Args:
+        df (DataFrame): DataFrame com os dados
+        
+    Returns:
+        DataFrame: DataFrame com top 5 ofensores por frota
+    """
+    print("Calculando ofensores por frota individual...")
+    
+    # Filtrar apenas registros com Estado Operacional PARADA (não produtivos)
+    df_paradas = df[df['Estado Operacional'] == 'PARADA'].copy()
+    
+    if len(df_paradas) == 0:
+        print("Nenhum registro de parada encontrado.")
+        return pd.DataFrame(columns=['Frota', 'Operação', 'Tempo', 'Porcentagem'])
+    
+    print(f"Encontrados {len(df_paradas)} registros de paradas não produtivas.")
+    
+    # Verificar se temos a coluna Equipamento para identificar frotas
+    if 'Equipamento' not in df_paradas.columns:
+        print("⚠️ Coluna 'Equipamento' não encontrada. Usando dados globais.")
+        return calcular_ofensores(df)
+    
+    # Agrupar por Frota (Equipamento) e Operacao
+    paradas_por_frota = df_paradas.groupby(['Equipamento', 'Operacao'])['Diferença_Hora'].sum().reset_index()
+    paradas_por_frota.rename(columns={'Equipamento': 'Frota', 'Diferença_Hora': 'Tempo'}, inplace=True)
+    
+    # Calcular porcentagem por frota
+    resultados_finais = []
+    
+    for frota in paradas_por_frota['Frota'].unique():
+        dados_frota = paradas_por_frota[paradas_por_frota['Frota'] == frota].copy()
+        
+        # Calcular tempo total de paradas para esta frota
+        tempo_total_frota = dados_frota['Tempo'].sum()
+        
+        # Calcular porcentagem
+        dados_frota['Porcentagem'] = dados_frota['Tempo'] / tempo_total_frota if tempo_total_frota > 0 else 0
+        
+        # Ordenar por tempo (decrescente) e pegar top 5
+        dados_frota = dados_frota.sort_values(by='Tempo', ascending=False).head(5)
+        
+        # Renomear coluna Operacao para Operação
+        dados_frota = dados_frota.rename(columns={'Operacao': 'Operação'})
+        
+        print(f"  🚜 Frota {frota}: {len(dados_frota)} ofensores, tempo total: {tempo_total_frota:.2f}h")
+        
+        resultados_finais.append(dados_frota)
+    
+    # Concatenar todos os resultados
+    if resultados_finais:
+        resultado_final = pd.concat(resultados_finais, ignore_index=True)
+        print(f"Total de ofensores por frota: {len(resultado_final)} registros")
+        return resultado_final
+    else:
+        return pd.DataFrame(columns=['Frota', 'Operação', 'Tempo', 'Porcentagem'])
+
 def calcular_lavagem(df):
     """
     Calcula os intervalos de lavagem para cada equipamento.
@@ -1735,7 +1797,7 @@ def processar_arquivo_maquina(caminho_arquivo, diretorio_saida):
     velocidade_media_produtiva = calcular_velocidade_media_produtiva(df_base)
     df_lavagem = calcular_lavagem(df_base)
     df_roletes = calcular_roletes(df_base)
-    df_ofensores = calcular_ofensores(df_base)
+    df_ofensores = calcular_ofensores_por_frota(df_base)
     df_intervalos = calcular_intervalos_operacionais(df_base)
     uso_gps_maquina = calcular_uso_gps_maquina(df_base)
     motor_ocioso_maquina = calcular_motor_ocioso_maquina_correto(df_base)
@@ -4305,104 +4367,63 @@ def calcular_painel_direito_por_frota(df_lavagem, df_roletes, df_ofensores, frot
                 "equipamentos": []
             }
         
-        # 3. Processar dados de OFENSORES (filtrados por frota individual)
+        # 3. Processar dados de OFENSORES (já calculados por frota individual)
         if df_ofensores is not None and not df_ofensores.empty:
-            # Filtrar ofensores por frota específica se informada
-            df_ofensores_filtrado = df_ofensores
-            
-            # Verificar se há uma coluna que identifica a frota/equipamento
+            # Os ofensores já vêm calculados por frota da função calcular_ofensores_por_frota
             colunas_ofensores = df_ofensores.columns.tolist()
             print(f"  📊 Colunas de ofensores disponíveis: {colunas_ofensores}")
             
-            # Tentar identificar coluna de equipamento/frota
-            coluna_equipamento = None
-            for col in colunas_ofensores:
-                if any(palavra in col.lower() for palavra in ['equipamento', 'frota', 'maquina', 'equip']):
-                    coluna_equipamento = col
-                    break
-            
-            # Se não encontrou coluna específica, usar a primeira coluna
-            if coluna_equipamento is None and len(colunas_ofensores) > 0:
-                coluna_equipamento = colunas_ofensores[0]
-                print(f"  ⚠️ Usando primeira coluna como equipamento: {coluna_equipamento}")
-            
-            # Filtrar por frota se especificada
-            if frota_especifica is not None and coluna_equipamento:
-                # Filtrar registros que correspondem à frota
-                mask_frota = df_ofensores[coluna_equipamento].astype(str).str.contains(str(frota_especifica), na=False)
-                df_ofensores_filtrado = df_ofensores[mask_frota]
-                print(f"  ⚠️ Processando ofensores para frota {frota_especifica}: {len(df_ofensores_filtrado)} de {len(df_ofensores)} registros")
+            # Filtrar por frota se especificada (coluna 'Frota' já existe)
+            if frota_especifica is not None and 'Frota' in colunas_ofensores:
+                df_ofensores_filtrado = df_ofensores[df_ofensores['Frota'] == frota_especifica]
+                print(f"  ⚠️ Processando ofensores para frota {frota_especifica}: {len(df_ofensores_filtrado)} de {len(df_ofensores)} registros (máximo 5)")
             else:
-                print(f"  ⚠️ Processando {len(df_ofensores)} registros de ofensores (todos)")
+                df_ofensores_filtrado = df_ofensores
+                print(f"  ⚠️ Processando {len(df_ofensores)} registros de ofensores (todos - máximo 5 por frota)")
             
-            # Converter dados de ofensores
+            # Converter dados de ofensores (estrutura: Frota, Operação, Tempo, Porcentagem)
             ofensores_lista = []
             for idx, linha in df_ofensores_filtrado.iterrows():
                 ofensor = {}
                 
-                # Processar primeira coluna (pode ser equipamento ou operação)
-                primeira_coluna = linha.iloc[0]
-                primeira_col_nome = df_ofensores_filtrado.columns[0].lower().replace(' ', '_').replace('(', '').replace(')', '').replace('%', 'pct')
-                
-                if pd.notna(primeira_coluna):
-                    # Tentar extrair número da primeira coluna se for string
-                    if isinstance(primeira_coluna, str):
-                        # Procurar por números no início da string
-                        match = re.match(r'^(\d+)', str(primeira_coluna))
-                        if match:
-                            codigo_num = int(match.group(1))
-                            if str(codigo_num).startswith('8'):  # Código de operação
-                                ofensor["codigo_operacao"] = codigo_num
-                                ofensor["equipamento"] = 0
-                            else:  # Número de equipamento
-                                ofensor["equipamento"] = codigo_num
-                                ofensor["codigo_operacao"] = 0
-                        else:
-                            ofensor["equipamento"] = 0
-                            ofensor["codigo_operacao"] = 0
-                        ofensor[primeira_col_nome] = str(primeira_coluna)
-                    elif pd.api.types.is_numeric_dtype(type(primeira_coluna)):
-                        valor_num = int(primeira_coluna)
-                        if str(valor_num).startswith('8'):  # Código de operação
-                            ofensor["codigo_operacao"] = valor_num
-                            ofensor["equipamento"] = 0
-                        else:  # Número de equipamento
-                            ofensor["equipamento"] = valor_num
-                            ofensor["codigo_operacao"] = 0
-                        ofensor[primeira_col_nome] = primeira_coluna
-                    else:
-                        ofensor["equipamento"] = 0
-                        ofensor["codigo_operacao"] = 0
-                        ofensor[primeira_col_nome] = str(primeira_coluna)
+                # Mapear colunas da nova estrutura por frota
+                if 'Frota' in linha:
+                    ofensor["frota"] = int(linha['Frota']) if pd.notna(linha['Frota']) else 0
                 else:
-                    ofensor["equipamento"] = 0
-                    ofensor["codigo_operacao"] = 0
-                    ofensor[primeira_col_nome] = ""
+                    ofensor["frota"] = 0
                 
-                # Mapear outras colunas dinamicamente
-                for i, col in enumerate(df_ofensores_filtrado.columns[1:], 1):
-                    if i < len(linha):
-                        valor = linha.iloc[i]
-                        # Converter nome da coluna para snake_case
-                        nome_campo = col.lower().replace(' ', '_').replace('(', '').replace(')', '').replace('%', 'pct')
-                        
-                        # Converter valor
-                        if pd.notna(valor):
-                            if isinstance(valor, str) and '%' in valor:
-                                # Converter porcentagem
-                                try:
-                                    ofensor[nome_campo] = float(valor.replace('%', ''))
-                                except:
-                                    ofensor[nome_campo] = str(valor)
-                            elif pd.api.types.is_numeric_dtype(type(valor)):
-                                ofensor[nome_campo] = valor
-                            else:
-                                ofensor[nome_campo] = str(valor)
+                if 'Operação' in linha:
+                    operacao = str(linha['Operação']) if pd.notna(linha['Operação']) else ""
+                    ofensor["operacao"] = operacao
+                    
+                    # Extrair código de operação se houver
+                    match = re.match(r'^(\d+)', operacao)
+                    if match:
+                        codigo_num = int(match.group(1))
+                        if str(codigo_num).startswith('8'):  # Código de operação
+                            ofensor["codigo_operacao"] = codigo_num
                         else:
-                            ofensor[nome_campo] = 0
+                            ofensor["codigo_operacao"] = 0
+                    else:
+                        ofensor["codigo_operacao"] = 0
+                else:
+                    ofensor["operacao"] = ""
+                    ofensor["codigo_operacao"] = 0
+                
+                if 'Tempo' in linha:
+                    tempo = pd.to_numeric(linha['Tempo'], errors='coerce')
+                    ofensor["tempo_horas"] = 0 if pd.isna(tempo) else tempo
+                else:
+                    ofensor["tempo_horas"] = 0
+                
+                if 'Porcentagem' in linha:
+                    porcentagem = pd.to_numeric(linha['Porcentagem'], errors='coerce')
+                    ofensor["porcentagem"] = 0 if pd.isna(porcentagem) else porcentagem
+                else:
+                    ofensor["porcentagem"] = 0
                 
                 ofensores_lista.append(ofensor)
-                print(f"    ⚠️ Ofensor {len(ofensores_lista)}: Equipamento {ofensor['equipamento']}, Dados: {primeira_coluna}")
+                print(f"    ⚠️ Ofensor {len(ofensores_lista)}: Frota {ofensor['frota']}, {ofensor['operacao']}, {ofensor['tempo_horas']:.2f}h ({ofensor['porcentagem']:.1f}%)")
             
             painel_direito["ofensores"] = ofensores_lista
         else:
