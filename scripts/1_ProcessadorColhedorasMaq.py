@@ -1969,7 +1969,7 @@ def processar_arquivo_maquina(caminho_arquivo, diretorio_saida):
         print("\n" + "="*50)
         print("📡 ENVIANDO DADOS PARA SUPABASE")
         print("="*50)
-        enviar_dados_supabase(df_parametros_medios, df_painel_esquerdo, df_lavagem, df_roletes, df_ofensores, df_producao, caminho_arquivo)
+        enviar_dados_supabase(df_parametros_medios, df_painel_esquerdo, df_lavagem, df_roletes, df_ofensores, df_producao, df_intervalos, caminho_arquivo)
     except Exception as e:
         print(f"⚠️ Erro ao enviar dados para Supabase: {e}")
         print("   Continuando processamento normalmente...")
@@ -4658,7 +4658,140 @@ def converter_chaves_snake_case(dados_dict):
     
     return dados_convertidos
 
-def enviar_dados_supabase(df_parametros, df_painel_esquerdo, df_lavagem, df_roletes, df_ofensores, df_producao, caminho_arquivo):
+def processar_intervalos_por_frota(df_intervalos, frota_especifica=None):
+    """
+    Processa dados de intervalos operacionais para uma frota específica ou global.
+    
+    Args:
+        df_intervalos (DataFrame): DataFrame com intervalos operacionais
+        frota_especifica (int, optional): Frota específica para filtrar. Se None, retorna dados globais.
+    
+    Returns:
+        dict: Dados dos intervalos formatados para Supabase
+    """
+    try:
+        if df_intervalos is None or df_intervalos.empty:
+            return {
+                "tem_dados": False,
+                "total_intervalos": 0,
+                "tipos": {
+                    "colhendo": {"intervalos": 0, "tempo_total_horas": 0},
+                    "manobras": {"intervalos": 0, "tempo_total_horas": 0},
+                    "manutencao": {"intervalos": 0, "tempo_total_horas": 0},
+                    "disponivel": {"intervalos": 0, "tempo_total_horas": 0}
+                },
+                "detalhes": []
+            }
+        
+        # Filtrar por frota se especificada
+        if frota_especifica is not None:
+            # Verificar se existe coluna 'Equipamento' (que é a frota)
+            if 'Equipamento' in df_intervalos.columns:
+                df_filtrado = df_intervalos[df_intervalos['Equipamento'] == frota_especifica]
+                print(f"  📊 Processando intervalos para frota {frota_especifica}: {len(df_filtrado)} de {len(df_intervalos)} registros")
+            else:
+                print(f"  ⚠️ Coluna 'Equipamento' não encontrada nos intervalos")
+                df_filtrado = df_intervalos
+        else:
+            df_filtrado = df_intervalos
+            print(f"  📊 Processando {len(df_intervalos)} intervalos (todos)")
+        
+        if df_filtrado.empty:
+            print(f"  📋 Nenhum intervalo encontrado para frota {frota_especifica}")
+            return {
+                "tem_dados": False,
+                "total_intervalos": 0,
+                "tipos": {
+                    "colhendo": {"intervalos": 0, "tempo_total_horas": 0},
+                    "manobras": {"intervalos": 0, "tempo_total_horas": 0},
+                    "manutencao": {"intervalos": 0, "tempo_total_horas": 0},
+                    "disponivel": {"intervalos": 0, "tempo_total_horas": 0}
+                },
+                "detalhes": []
+            }
+        
+        # Inicializar contadores
+        tipos_resumo = {
+            "colhendo": {"intervalos": 0, "tempo_total_horas": 0},
+            "manobras": {"intervalos": 0, "tempo_total_horas": 0},
+            "manutencao": {"intervalos": 0, "tempo_total_horas": 0},
+            "disponivel": {"intervalos": 0, "tempo_total_horas": 0}
+        }
+        
+        detalhes_intervalos = []
+        
+        # Processar cada intervalo
+        for _, row in df_filtrado.iterrows():
+            tipo = str(row.get('Tipo', '')).lower()
+            
+            # Mapear tipos para chaves snake_case
+            if tipo == 'colhendo':
+                chave_tipo = 'colhendo'
+            elif tipo == 'manobras':
+                chave_tipo = 'manobras'
+            elif tipo == 'manutenção':
+                chave_tipo = 'manutencao'
+            elif tipo == 'disponível':
+                chave_tipo = 'disponivel'
+            else:
+                chave_tipo = 'disponivel'  # Default
+            
+            # Obter duração (pode estar em diferentes colunas)
+            duracao = 0
+            for col_duracao in ['Duração (horas)', 'Duracao', 'Tempo', 'Duracao_Horas']:
+                if col_duracao in row and pd.notna(row[col_duracao]):
+                    duracao = pd.to_numeric(row[col_duracao], errors='coerce')
+                    duracao = 0 if pd.isna(duracao) else duracao
+                    break
+            
+            # Atualizar contadores
+            tipos_resumo[chave_tipo]["intervalos"] += 1
+            tipos_resumo[chave_tipo]["tempo_total_horas"] += duracao
+            
+            # Adicionar detalhes do intervalo
+            detalhe = {
+                "equipamento": int(row.get('Equipamento', 0)) if pd.notna(row.get('Equipamento')) else 0,
+                "data": str(row.get('Data', '')),
+                "intervalo": str(row.get('Intervalo', '')),
+                "tipo": tipo,
+                "inicio": str(row.get('Início', '')),
+                "fim": str(row.get('Fim', '')),
+                "duracao_horas": duracao
+            }
+            detalhes_intervalos.append(detalhe)
+        
+        total_intervalos = sum(t["intervalos"] for t in tipos_resumo.values())
+        
+        resultado = {
+            "tem_dados": total_intervalos > 0,
+            "total_intervalos": total_intervalos,
+            "tipos": tipos_resumo,
+            "detalhes": detalhes_intervalos
+        }
+        
+        print(f"  🎯 Intervalos processados: {total_intervalos} total")
+        print(f"      - Colhendo: {tipos_resumo['colhendo']['intervalos']} ({tipos_resumo['colhendo']['tempo_total_horas']:.2f}h)")
+        print(f"      - Manobras: {tipos_resumo['manobras']['intervalos']} ({tipos_resumo['manobras']['tempo_total_horas']:.2f}h)")
+        print(f"      - Manutenção: {tipos_resumo['manutencao']['intervalos']} ({tipos_resumo['manutencao']['tempo_total_horas']:.2f}h)")
+        print(f"      - Disponível: {tipos_resumo['disponivel']['intervalos']} ({tipos_resumo['disponivel']['tempo_total_horas']:.2f}h)")
+        
+        return resultado
+        
+    except Exception as e:
+        print(f"❌ Erro ao processar intervalos: {e}")
+        return {
+            "tem_dados": False,
+            "total_intervalos": 0,
+            "tipos": {
+                "colhendo": {"intervalos": 0, "tempo_total_horas": 0},
+                "manobras": {"intervalos": 0, "tempo_total_horas": 0},
+                "manutencao": {"intervalos": 0, "tempo_total_horas": 0},
+                "disponivel": {"intervalos": 0, "tempo_total_horas": 0}
+            },
+            "detalhes": []
+        }
+
+def enviar_dados_supabase(df_parametros, df_painel_esquerdo, df_lavagem, df_roletes, df_ofensores, df_producao, df_intervalos, caminho_arquivo):
     """
     Envia dados completos (parâmetros médios, painel esquerdo e painel direito) para a tabela do Supabase.
     Cria um registro separado para cada frota com UUID único e chaves em snake_case.
@@ -4671,6 +4804,7 @@ def enviar_dados_supabase(df_parametros, df_painel_esquerdo, df_lavagem, df_role
         df_roletes (DataFrame): DataFrame com dados de roletes
         df_ofensores (DataFrame): DataFrame com dados de ofensores
         df_producao (DataFrame): DataFrame com dados de produção
+        df_intervalos (DataFrame): DataFrame com dados de intervalos operacionais
         caminho_arquivo (str): Caminho do arquivo processado para extrair metadata
     """
     try:
@@ -4735,6 +4869,24 @@ def enviar_dados_supabase(df_parametros, df_painel_esquerdo, df_lavagem, df_role
                         "producao_frota": {"frota": 0, "toneladas": 0, "horas_elevador": 0, "ton_por_hora": 0, "tem_dados": False}
                     }
                 
+                # Processar dados de intervalos operacionais específicos para esta frota
+                try:
+                    dados_intervalos_frota = processar_intervalos_por_frota(df_intervalos, frota_especifica=frota)
+                    print(f"      📈 Intervalos processados para frota {frota}")
+                except Exception as e:
+                    print(f"      ⚠️ Erro ao processar intervalos para frota {frota}: {e}")
+                    dados_intervalos_frota = {
+                        "tem_dados": False,
+                        "total_intervalos": 0,
+                        "tipos": {
+                            "colhendo": {"intervalos": 0, "tempo_total_horas": 0},
+                            "manobras": {"intervalos": 0, "tempo_total_horas": 0},
+                            "manutencao": {"intervalos": 0, "tempo_total_horas": 0},
+                            "disponivel": {"intervalos": 0, "tempo_total_horas": 0}
+                        },
+                        "detalhes": []
+                    }
+                
                 # Dados para UPSERT (inserir ou atualizar) baseado na chave primária
                 dados_registro = {
                     "data_dia": data_dia,
@@ -4743,6 +4895,7 @@ def enviar_dados_supabase(df_parametros, df_painel_esquerdo, df_lavagem, df_role
                     "parametros_medios": [parametros_frota],  # Array com um registro da frota
                     "painel_esquerdo": painel_esquerdo_frota,  # Dados do painel esquerdo
                     "painel_direito": dados_painel_direito_frota,  # Dados do painel direito específicos da frota
+                    "gantt_intervalos": dados_intervalos_frota,  # Dados dos intervalos operacionais específicos da frota
                     "updated_at": datetime.now().isoformat()
                 }
                 
@@ -4771,6 +4924,7 @@ def enviar_dados_supabase(df_parametros, df_painel_esquerdo, df_lavagem, df_role
                         "parametros_medios": dados_registro["parametros_medios"],
                         "painel_esquerdo": dados_registro["painel_esquerdo"],
                         "painel_direito": dados_registro["painel_direito"],  # Agora específico da frota
+                        "gantt_intervalos": dados_registro["gantt_intervalos"],  # Intervalos específicos da frota
                         "updated_at": dados_registro["updated_at"]
                     }
                     
