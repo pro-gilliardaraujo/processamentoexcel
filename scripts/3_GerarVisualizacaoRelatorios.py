@@ -25,14 +25,16 @@ CONFIG = {
     'COLORS': {
         'Produtivo': '#51CF66',   # Verde
         'Disponível': '#74C0FC', # Azul claro
-        'Manutenção': '#FF6B6B'  # Vermelho
+        'Manutenção': '#FF6B6B',  # Vermelho
+        'Falta de Informação': '#FFFFFF' # Branco
     },
 
     # Posições verticais das barras: deslocadas +0.5 para criar folga inferior
     'Y_POS': {
         'Produtivo': 2.5,    # Linha superior (antes 1)
         'Disponível': 2.0,   # Linha central (antes 0)
-        'Manutenção': 1.5   # Linha inferior (antes -1)
+        'Manutenção': 1.5,   # Linha inferior (antes -1)
+        'Falta de Informação': 0.5 # Linha inferior para falta de informação
     },
 
     # Deslocamento vertical aplicado a TODAS as barras
@@ -60,8 +62,8 @@ CONFIG = {
     # Transforma durações maiores que este limiar (min) em texto dentro da barra
     'LABEL_THRESHOLD_MIN': 60,
 
-    # Diretório onde os gráficos serão salvos
-    'OUTPUT_DIR': os.path.join('output', 'graficos'),
+    # Diretório onde os gráficos serão salvos (mesmo local que os outros arquivos gerados)
+    'OUTPUT_DIR': os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'output', 'graficos')),
 
     # Ajuste vertical da legenda (fração fora do eixo). Menor → legenda mais próxima do gráfico
     'LEGEND_Y': 1.0,
@@ -125,8 +127,18 @@ def plot_gantt(df: pd.DataFrame, equipamento: Optional[str] = None, data: Option
         tipo = row['Tipo']
         cor = CONFIG['COLORS'].get(tipo, '#808080')
         y = CONFIG['Y_POS'].get(tipo, 0) + CONFIG.get('Y_SHIFT', 0)
-        ax.barh(y, row['duracao_min'], left=row['inicio_min'], height=CONFIG['BAR_HEIGHT'],
-                 color=cor, edgecolor='black', linewidth=0.4, alpha=0.9, zorder=3)
+        # Barras sem contorno (edge) para visual mais limpo
+        ax.barh(
+            y,
+            row['duracao_min'],
+            left=row['inicio_min'],
+            height=CONFIG['BAR_HEIGHT'],
+            color=cor,
+            edgecolor='none',  # remove borda
+            linewidth=0,
+            alpha=0.9,
+            zorder=3,
+        )
         if row['duracao_min'] >= CONFIG['LABEL_THRESHOLD_MIN']:
             ax.text(row['inicio_min'] + row['duracao_min'] / 2, y,
                     f"{row['duracao_min'] / 60:.1f}h", va='center', ha='center', fontsize=7, color='black')
@@ -242,9 +254,17 @@ def plot_gantt(df: pd.DataFrame, equipamento: Optional[str] = None, data: Option
     ax.grid(True, axis='x', which='minor', linestyle='--', alpha=CONFIG.get('SUB_TICK_ALPHA', 0.4), zorder=0)
 
     # Legenda (horizontal)
-    legend_elems = [Patch(facecolor=c, label=t) for t, c in CONFIG['COLORS'].items()]
-    # Adiciona entrada de legenda para faltas de informação
-    legend_elems.append(Patch(facecolor='#FFFFFF', edgecolor='black', label='Falta de Informação'))
+    # Adiciona contorno preto a todos os patches da legenda –
+    # facilita visualizar a cor branca ("Falta de Informação")
+    legend_elems = [
+        Patch(
+            facecolor=c,
+            edgecolor='black',      # contorno visível
+            linewidth=0.8,
+            label=t
+        )
+        for t, c in CONFIG['COLORS'].items()
+    ]
     legend_y = CONFIG.get('LEGEND_Y', 1.08)
     ax.legend(handles=legend_elems, loc='upper center', bbox_to_anchor=(0.5, legend_y),
               ncol=len(legend_elems), frameon=False, fontsize=9)
@@ -266,6 +286,218 @@ def plot_gantt(df: pd.DataFrame, equipamento: Optional[str] = None, data: Option
         plt.show()
     else:
         plt.close(fig)
+
+# ====================================================================================
+# FUNÇÃO PARA INTEGRAÇÃO COM SUPABASE - CHAMADA PELO FLUXO DE RELATÓRIOS
+# ====================================================================================
+
+def gerar_graficos_intervalos_para_relatorio(xlsx_file_path, report_id):
+    """
+    Função chamada pelo fluxo de relatórios para gerar gráficos de intervalos de um XLSX
+    e fazer upload dos URLs para o Supabase no mesmo campo dos mapas.
+    
+    Args:
+        xlsx_file_path: Caminho para o arquivo XLSX processado com planilha 'Intervalos'
+        report_id: ID do relatório no Supabase para vincular os gráficos
+    
+    Returns:
+        List[str]: Lista de URLs dos gráficos gerados
+    """
+    try:
+        print(f"\n📊 === GERAÇÃO DE GRÁFICOS DE INTERVALOS PARA RELATÓRIO {report_id} ===")
+        print(f"📁 Arquivo XLSX: {os.path.basename(xlsx_file_path)}")
+        
+        # Verificar se arquivo existe
+        if not os.path.exists(xlsx_file_path):
+            print(f"❌ Arquivo XLSX não encontrado: {xlsx_file_path}")
+            return []
+        
+        # Tentar ler planilha 'Intervalos'
+        try:
+            df = pd.read_excel(xlsx_file_path, sheet_name='Intervalos')
+            print(f"✅ Planilha 'Intervalos' carregada: {len(df)} registros")
+        except Exception as e:
+            print(f"❌ Erro ao ler planilha 'Intervalos': {e}")
+            return []
+        
+        if df.empty:
+            print(f"⚠️ Planilha 'Intervalos' está vazia")
+            return []
+        
+        # Preparar diretório de gráficos
+        graficos_dir = CONFIG['OUTPUT_DIR']
+        os.makedirs(graficos_dir, exist_ok=True)
+        
+        # Lista para armazenar URLs dos gráficos
+        urls_graficos = []
+        
+        # Configurar sistema de upload
+        try:
+            from app.database.supabase_client import create_admin_client
+            admin_client = create_admin_client()
+        except ImportError:
+            # Fallback para estrutura de imports alternativos
+            import sys
+            sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
+            from app.database.supabase_client import create_admin_client
+            admin_client = create_admin_client()
+        
+        BUCKET_NAME = 'mapas'
+        SUBFOLDER = 'intervalos'
+        SUPA_URL = os.environ.get('SUPABASE_URL', 'https://kjlwqezxzqjfhacmjhbh.supabase.co')
+        
+        def _upload_grafico_png(caminho_local: str, nome_arquivo: str):
+            """Faz upload de um PNG de gráfico para o Supabase storage."""
+            try:
+                if not os.path.exists(caminho_local):
+                    print(f"❌ Arquivo não encontrado: {caminho_local}")
+                    return None
+                
+                storage_path = f"{SUBFOLDER}/{nome_arquivo}"
+                
+                # Ler arquivo
+                with open(caminho_local, 'rb') as f:
+                    data = f.read()
+                
+                # Criar bucket se necessário
+                try:
+                    buckets = admin_client.storage.list_buckets()
+                    if not any(b.get('name') == BUCKET_NAME for b in buckets):
+                        admin_client.storage.create_bucket(BUCKET_NAME, {'public': True})
+                except Exception:
+                    pass
+                
+                # Upload
+                admin_client.storage.from_(BUCKET_NAME).upload(
+                    storage_path, data, {
+                        "contentType": "image/png",
+                        "upsert": "true"
+                    }
+                )
+                
+                # Construir URL pública
+                url = admin_client.storage.from_(BUCKET_NAME).get_public_url(storage_path)
+                if not url:
+                    url = f"{SUPA_URL}/storage/v1/object/public/{BUCKET_NAME}/{storage_path}"
+                
+                print(f"✅ Upload gráfico concluído: {nome_arquivo} -> {url}")
+                return url
+            except Exception as e:
+                print(f"❌ Falha no upload de {nome_arquivo}: {e}")
+                return None
+        
+        # Gerar gráfico para cada equipamento
+        equipamentos = df['Equipamento'].unique()
+        print(f"📈 Gerando gráficos para {len(equipamentos)} equipamento(s): {list(equipamentos)}")
+        
+        for equipamento in equipamentos:
+            try:
+                # Filtrar dados do equipamento
+                df_equip = df[df['Equipamento'] == equipamento]
+                
+                # Determinar data (se disponível)
+                data = None
+                if 'Data' in df_equip.columns and not df_equip['Data'].empty:
+                    data_values = df_equip['Data'].dropna().unique()
+                    if len(data_values) > 0:
+                        data = str(data_values[0])
+                
+                # Gerar nome do arquivo
+                data_str = data.replace('/', '-') if data else 'all'
+                nome_arquivo = f"gantt_{equipamento}_{data_str}.png"
+                caminho_completo = os.path.join(graficos_dir, nome_arquivo)
+                
+                print(f"  📊 Gerando gráfico para equipamento {equipamento}...")
+                
+                # Gerar gráfico sem exibir (exibir=False) e salvar
+                plot_gantt(df, equipamento=equipamento, data=data, salvar_png=True, exibir=False)
+                
+                # Verificar se arquivo foi gerado e fazer upload
+                if os.path.exists(caminho_completo):
+                    url_grafico = _upload_grafico_png(caminho_completo, nome_arquivo)
+                    if url_grafico:
+                        urls_graficos.append(url_grafico)
+                        print(f"  ✅ Gráfico gerado e enviado: {nome_arquivo}")
+                    else:
+                        print(f"  ⚠️ Falha no upload do gráfico para {equipamento}")
+                else:
+                    print(f"  ⚠️ Gráfico não foi gerado para {equipamento}")
+                    
+            except Exception as e:
+                print(f"  ❌ Erro ao gerar gráfico para equipamento {equipamento}: {e}")
+                continue
+        
+        if not urls_graficos:
+            print(f"❌ Nenhum gráfico foi gerado com sucesso")
+            return []
+        
+        print(f"✅ Total de gráficos gerados: {len(urls_graficos)}")
+        return urls_graficos
+        
+    except Exception as e:
+        print(f"❌ Erro geral na geração de gráficos: {e}")
+        return []
+
+def atualizar_urls_graficos_no_supabase(report_id, urls_graficos):
+    """
+    Atualiza o campo url_mapa no Supabase adicionando os gráficos no container 'intervalos'.
+    Preserva os dados existentes de outros containers.
+    
+    Args:
+        report_id: ID do relatório no Supabase
+        urls_graficos: Lista de URLs dos gráficos gerados
+    
+    Returns:
+        bool: True se sucesso, False se erro
+    """
+    try:
+        try:
+            from app.database.supabase_client import create_admin_client
+            admin_client = create_admin_client()
+        except ImportError:
+            # Fallback para estrutura de imports alternativos
+            import sys
+            import os
+            sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
+            from app.database.supabase_client import create_admin_client
+            admin_client = create_admin_client()
+        
+        # Primeiro, buscar dados existentes do relatório
+        resultado_busca = admin_client.table('relatorios_diarios').select('url_mapa').eq('id', report_id).execute()
+        
+        if not resultado_busca.data:
+            print(f"❌ Relatório {report_id} não encontrado no Supabase")
+            return False
+        
+        # Obter dados existentes de url_mapa ou criar objeto vazio
+        url_mapa_atual = resultado_busca.data[0].get('url_mapa', {})
+        if url_mapa_atual is None:
+            url_mapa_atual = {}
+        
+        # Adicionar container de intervalos preservando outros containers
+        url_mapa_atual['intervalos'] = urls_graficos
+        
+        # Preparar dados para atualização
+        update_data = {
+            'url_mapa': url_mapa_atual
+        }
+        
+        # Atualizar no Supabase
+        resultado = admin_client.table('relatorios_diarios').update(update_data).eq('id', report_id).execute()
+        
+        if resultado.data:
+            print(f"✅ URLs dos gráficos atualizados no Supabase para relatório {report_id}")
+            print(f"📊 Container intervalos criado com {len(urls_graficos)} arquivo(s)")
+            for i, url in enumerate(urls_graficos, 1):
+                print(f"  intervalos[{i-1}]: {url}")
+            return True
+        else:
+            print(f"❌ Falha ao atualizar URLs dos gráficos no Supabase")
+            return False
+
+    except Exception as e:
+        print(f"❌ Erro ao atualizar Supabase com gráficos: {e}")
+        return False
 
 # ----------------------------------------------------------------------------
 # Leitura de arquivo Excel
