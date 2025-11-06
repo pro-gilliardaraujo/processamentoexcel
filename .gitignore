@@ -1,2 +1,43 @@
 # Arquivos temporários do Excel
-~$* 
+~$*
+
+# Ambiente virtual Python
+.venv/
+env/
+venv/
+
+# Cache e compilados Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+*.dist-info/
+.python-version
+.pytest_cache/
+.mypy_cache/
+
+# Dados e saídas volumosas (não versionar arquivos gerados ou dados brutos)
+output/
+backup/
+dados/
+
+# Logs e temporários
+*.log
+*.tmp
+*.bak
+
+# IDEs e editores
+.vscode/
+.idea/
+*.code-workspace
+
+# Node/NPM (se aplicável)
+node_modules/
+dist/
+build/
+
+# Arquivos de configuração sensíveis
+.env
+.env.*
+*.env
